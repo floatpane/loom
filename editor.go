@@ -25,7 +25,7 @@ type editor struct {
 	commitMode  bool
 	suggestions []suggestion
 	selSug      int
-	coAuthors   []coAuthor
+	people      *peopleStore
 }
 
 func newEditor() *editor {
@@ -368,7 +368,7 @@ func (e *editor) updateSuggestions() {
 		e.selSug = -1
 		return
 	}
-	e.suggestions = computeSuggestions(e.lines, e.row, e.col, e.coAuthors)
+	e.suggestions = computeSuggestions(e.lines, e.row, e.col, e.people)
 	if len(e.suggestions) > 0 {
 		e.selSug = 0
 	} else {
@@ -390,6 +390,33 @@ func (e *editor) acceptSuggestion() {
 	e.syncToViewport()
 	e.suggestions = nil
 	e.selSug = -1
+
+	// If this was a person suggestion, persist the person for future sessions
+	if s.kind == "person" && e.people != nil {
+		p := parsePerson(s.text)
+		if p != nil {
+			e.people.addPerson(*p)
+			e.people.save()
+		}
+	}
+}
+
+// parsePerson parses a "Name <email>" string into a person struct.
+func parsePerson(s string) *person {
+	s = strings.TrimSpace(s)
+	if !strings.HasSuffix(s, ">") {
+		return nil
+	}
+	idx := strings.LastIndex(s, "<")
+	if idx < 1 {
+		return nil
+	}
+	name := strings.TrimSpace(s[:idx])
+	email := strings.TrimSpace(s[idx+1 : len(s)-1])
+	if name == "" || email == "" {
+		return nil
+	}
+	return &person{name: name, email: email}
 }
 
 // --- Rendering ---
@@ -530,12 +557,14 @@ func (e *editor) renderSuggestionPopup() []string {
 	kindLabel := map[string]string{
 		"type":    "Type",
 		"word":    "Text",
-		"coauthor": "Author",
+		"person":  "Person",
+		"trailer": "Trailer",
 	}
 	kindColor := map[string]color.Color{
 		"type":    lipgloss.Color("42"),
 		"word":    lipgloss.Color("39"),
-		"coauthor": lipgloss.Color("99"),
+		"person":  lipgloss.Color("99"),
+		"trailer": lipgloss.Color("141"),
 	}
 
 	selectedBg := lipgloss.Color("62")

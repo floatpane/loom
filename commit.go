@@ -22,7 +22,7 @@ type commitModel struct {
 	infoRaw   string
 	author    string
 	date      time.Time
-	coAuthors []coAuthor
+	people    *peopleStore
 	width     int
 	height    int
 	saved     bool
@@ -38,8 +38,8 @@ func newCommitModel(path string) *commitModel {
 	m.diffVP.SoftWrap = false
 
 	m.loadCommitMeta()
-	m.coAuthors = loadCoAuthors()
-	ed.coAuthors = m.coAuthors
+	m.people = newPeopleStore()
+	ed.people = m.people
 
 	if data, err := os.ReadFile(path); err == nil {
 		m.parseCommitFile(string(data))
@@ -210,6 +210,15 @@ func (m *commitModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 }
 
 func (m *commitModel) save() tea.Cmd {
+	// Extract and persist any people found in trailer lines
+	if m.people != nil {
+		people := extractPeopleFromTrailerLines(m.editor.lines)
+		for _, p := range people {
+			m.people.addPerson(p)
+		}
+		m.people.save()
+	}
+
 	content := m.editor.value()
 	if m.infoRaw != "" {
 		content = content + "\n" + m.infoRaw + "\n"
