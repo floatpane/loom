@@ -9,6 +9,7 @@ import (
 	"time"
 
 	tea "charm.land/bubbletea/v2"
+	"charm.land/bubbles/v2/viewport"
 	"charm.land/lipgloss/v2"
 )
 
@@ -31,10 +32,14 @@ type rebaseModel struct {
 	expanded int // -1 = no item expanded, otherwise index into items
 	diff     string
 	diffErr  error
+	diffVP   viewport.Model
+	diffReady bool
 }
 
 func newRebaseModel(path string) *rebaseModel {
 	m := &rebaseModel{path: path, expanded: -1}
+	m.diffVP = viewport.New()
+	m.diffVP.SoftWrap = false
 	m.load()
 	return m
 }
@@ -129,10 +134,49 @@ func (m *rebaseModel) loadDiff(hash string) {
 	if err != nil {
 		m.diffErr = fmt.Errorf("git show failed: %v", err)
 		m.diff = ""
+		m.diffReady = false
 		return
 	}
 	m.diff = string(output)
 	m.diffErr = nil
+	m.prepareDiffView()
+}
+
+// prepareDiffView parses the raw diff and pre-renders all lines into the
+// viewport. This runs once when the diff is expanded so that View() only
+// needs to slice the visible window — no re-parsing or re-highlighting.
+func (m *rebaseModel) prepareDiffView() {
+	files := parseUnifiedDiff(m.diff)
+	if len(files) == 0 {
+		m.diffVP.SetContentLines([]string{"(no changes)"})
+		m.diffReady = true
+		return
+	}
+
+	diffWidth := m.width
+	if diffWidth <= 0 {
+		diffWidth = 80
+	}
+	// Account for the border + left margin we add in renderExpandedDiff
+	diffWidth -= 4
+	if diffWidth < 20 {
+		diffWidth = 20
+	}
+
+	rendered := renderDiff(files, diffWidth)
+	lines := strings.Split(rendered, "\n")
+	m.diffVP.SetContentLines(lines)
+
+	// Set viewport dimensions to the available height
+	diffHeight := m.height
+	if diffHeight > 0 {
+		// title(1) + blank(1) + commit rows + blank(1) + help(2 lines) ≈ subtract overhead
+		// We'll give the diff up to half the screen
+		diffHeight = max(5, m.height/2)
+	}
+	m.diffVP.SetWidth(diffWidth + 4)
+	m.diffVP.SetHeight(diffHeight)
+	m.diffReady = true
 }
 
 func (m *rebaseModel) write() error {
@@ -152,9 +196,52 @@ func (m *rebaseModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case tea.WindowSizeMsg:
 		m.width = msg.Width
 		m.height = msg.Height
+		if m.expanded >= 0 && m.diffReady {
+			m.prepareDiffView()
+		}
 		return m, nil
 
 	case tea.KeyPressMsg:
+		// When diff is expanded, scroll keys go to the diff viewport
+		if m.expanded >= 0 {
+			switch msg.String() {
+			case "ctrl+c", "q":
+				return m, tea.Quit
+			case "enter":
+				if err := m.write(); err != nil {
+					m.err = err
+					return m, nil
+				}
+				m.saved = true
+				return m, tea.Quit
+			case "tab", " ":
+				m.expanded = -1
+				m.diff = ""
+				m.diffReady = false
+			case "esc":
+				m.expanded = -1
+				m.diff = ""
+				m.diffReady = false
+			case "up", "k":
+				m.diffVP.ScrollUp(1)
+			case "down", "j":
+				m.diffVP.ScrollDown(1)
+			case "pgup":
+				m.diffVP.PageUp()
+			case "pgdown":
+				m.diffVP.PageDown()
+			case "ctrl+u":
+				m.diffVP.HalfPageUp()
+			case "ctrl+d":
+				m.diffVP.HalfPageDown()
+			case "g":
+				m.diffVP.GotoTop()
+			case "G":
+				m.diffVP.GotoBottom()
+			}
+			return m, nil
+		}
+
 		switch msg.String() {
 		case "ctrl+c", "q":
 			return m, tea.Quit
@@ -166,89 +253,49 @@ func (m *rebaseModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.saved = true
 			return m, tea.Quit
 		case "up", "k":
-			if m.expanded >= 0 {
-				break
-			}
 			if m.cursor > 0 {
 				m.cursor--
 			}
 		case "down", "j":
-			if m.expanded >= 0 {
-				break
-			}
 			if m.cursor < len(m.items)-1 {
 				m.cursor++
 			}
 		case "shift+up", "K":
-			if m.expanded >= 0 {
-				break
-			}
 			if m.cursor > 0 {
 				m.items[m.cursor-1], m.items[m.cursor] = m.items[m.cursor], m.items[m.cursor-1]
 				m.cursor--
 			}
 		case "shift+down", "J":
-			if m.expanded >= 0 {
-				break
-			}
 			if m.cursor < len(m.items)-1 {
 				m.items[m.cursor+1], m.items[m.cursor] = m.items[m.cursor], m.items[m.cursor+1]
 				m.cursor++
 			}
 		case "tab", " ":
-			if m.expanded == m.cursor {
-				m.expanded = -1
-				m.diff = ""
-			} else {
-				m.expanded = m.cursor
-				m.loadDiff(m.items[m.cursor].hash)
-			}
+			m.expanded = m.cursor
+			m.loadDiff(m.items[m.cursor].hash)
 		case "esc":
-			if m.expanded >= 0 {
-				m.expanded = -1
-				m.diff = ""
-			} else {
-				return m, tea.Quit
-			}
+			return m, tea.Quit
 		case "p":
-			if m.expanded >= 0 {
-				break
-			}
 			if m.cursor < len(m.items) {
 				m.items[m.cursor].action = "pick"
 			}
 		case "r":
-			if m.expanded >= 0 {
-				break
-			}
 			if m.cursor < len(m.items) {
 				m.items[m.cursor].action = "reword"
 			}
 		case "e":
-			if m.expanded >= 0 {
-				break
-			}
 			if m.cursor < len(m.items) {
 				m.items[m.cursor].action = "edit"
 			}
 		case "s":
-			if m.expanded >= 0 {
-				break
-			}
 			if m.cursor < len(m.items) {
 				m.items[m.cursor].action = "squash"
 			}
 		case "f":
-			if m.expanded >= 0 {
-				break
-			}
 			if m.cursor < len(m.items) {
 				m.items[m.cursor].action = "fixup"
 			}
 		case "d":
-			if m.expanded >= 0 {
-				break
-			}
 			if m.cursor < len(m.items) {
 				m.items[m.cursor].action = "drop"
 			}
@@ -365,7 +412,7 @@ func (m *rebaseModel) View() tea.View {
 
 	helpText := "↑/k ↓/j move  •  shift+↑/K shift+↓/J reorder  •  p pick  r reword  e edit  s squash  f fixup  d drop  •  tab/space expand diff  •  enter save  q/esc cancel"
 	if m.expanded >= 0 {
-		helpText = "tab/space collapse  •  ↑/k ↓/j scroll  •  esc/q back"
+		helpText = "↑/k ↓/j scroll  •  pgup/pgdn page  •  g/G top/bottom  •  tab/space collapse  •  esc back  •  enter save"
 	}
 
 	help := lipgloss.NewStyle().
@@ -387,27 +434,14 @@ func (m *rebaseModel) renderExpandedDiff() string {
 			Padding(0, 2).
 			Render(fmt.Sprintf("  %v", m.diffErr))
 	}
-	if m.diff == "" {
+	if !m.diffReady {
 		return lipgloss.NewStyle().
 			Foreground(lipgloss.Color("241")).
 			Padding(0, 2).
-			Render("  (no diff)")
+			Render("  loading…")
 	}
 
-	files := parseUnifiedDiff(m.diff)
-	if len(files) == 0 {
-		return lipgloss.NewStyle().
-			Foreground(lipgloss.Color("241")).
-			Padding(0, 2).
-			Render("  (no changes)")
-	}
-
-	diffWidth := m.width
-	if diffWidth <= 0 {
-		diffWidth = 80
-	}
-
-	rendered := renderDiff(files, diffWidth)
+	content := m.diffVP.View()
 
 	boxStyle := lipgloss.NewStyle().
 		MarginLeft(2).
@@ -415,5 +449,5 @@ func (m *rebaseModel) renderExpandedDiff() string {
 		BorderForeground(lipgloss.Color("238")).
 		Padding(0, 0)
 
-	return boxStyle.Render(rendered)
+	return boxStyle.Render(content)
 }
