@@ -369,6 +369,12 @@ func langFromPath(path string) string {
 	return normalizeLang(ext)
 }
 
+// detectLangFromPath returns a language hint for syntax highlighting from
+// a file path. Returns "" for unknown/unsupported extensions.
+func detectLangFromPath(path string) string {
+	return langFromPath(path)
+}
+
 // --- ANSI reset rewriting (from matcha) ---
 
 var resetRe = regexp.MustCompile(`\x1b\[0*m`)
