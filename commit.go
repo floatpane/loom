@@ -3,37 +3,35 @@ package main
 import (
 	"fmt"
 	"os"
+	"strings"
 
 	tea "charm.land/bubbletea/v2"
-	"charm.land/bubbles/v2/textarea"
 	"charm.land/lipgloss/v2"
 )
 
 type commitModel struct {
-	path     string
-	textarea textarea.Model
-	width    int
-	height   int
-	saved    bool
-	err      error
+	path   string
+	editor *editor
+	width  int
+	height int
+	saved  bool
+	err    error
 }
 
 func newCommitModel(path string) *commitModel {
-	ta := textarea.New()
-	ta.ShowLineNumbers = true
+	ed := newEditor()
 
 	if data, err := os.ReadFile(path); err == nil {
-		ta.SetValue(string(data))
+		ed.setContent(string(data))
 	} else {
-		ta.Placeholder = "Enter your commit message..."
+		ed.lines = []string{""}
 	}
-	ta.Focus()
 
-	return &commitModel{path: path, textarea: ta}
+	return &commitModel{path: path, editor: ed}
 }
 
 func (m *commitModel) Init() tea.Cmd {
-	return m.textarea.Focus()
+	return nil
 }
 
 func (m *commitModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
@@ -43,14 +41,15 @@ func (m *commitModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.height = msg.Height
 		headerHeight := 3
 		footerHeight := 3
-		m.textarea.SetWidth(msg.Width)
-		m.textarea.SetHeight(max(1, msg.Height-headerHeight-footerHeight))
+		m.editor.setWidth(msg.Width)
+		m.editor.setHeight(max(1, msg.Height-headerHeight-footerHeight))
+		m.editor.syncToViewport()
 		return m, nil
 
 	case tea.KeyPressMsg:
 		switch msg.String() {
 		case "ctrl+s":
-			if err := os.WriteFile(m.path, []byte(m.textarea.Value()), 0644); err != nil {
+			if err := os.WriteFile(m.path, []byte(m.editor.value()), 0644); err != nil {
 				m.err = err
 				return m, nil
 			}
@@ -61,11 +60,12 @@ func (m *commitModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		case "esc":
 			return m, tea.Quit
 		}
-	}
 
-	var cmd tea.Cmd
-	m.textarea, cmd = m.textarea.Update(msg)
-	return m, cmd
+		m.editor.handleKey(msg)
+		m.editor.ensureVisible()
+		return m, nil
+	}
+	return m, nil
 }
 
 func (m *commitModel) View() tea.View {
@@ -84,6 +84,13 @@ func (m *commitModel) View() tea.View {
 		statusText = fmt.Sprintf("error: %v", m.err)
 	}
 
+	lineCount := len(m.editor.lines)
+	wordCount := 0
+	for _, line := range m.editor.lines {
+		wordCount += len(strings.Fields(line))
+	}
+	statusText = fmt.Sprintf("ctrl+s save  •  esc cancel  •  %d lines  %d words", lineCount, wordCount)
+
 	footer := lipgloss.NewStyle().
 		Foreground(lipgloss.Color("241")).
 		Background(lipgloss.Color("236")).
@@ -91,7 +98,7 @@ func (m *commitModel) View() tea.View {
 		Width(m.width).
 		Render(statusText)
 
-	body := m.textarea.View()
+	body := m.editor.view()
 
 	content := lipgloss.JoinVertical(lipgloss.Left, header, body, footer)
 

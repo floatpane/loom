@@ -124,7 +124,7 @@ func (m *rebaseModel) loadCommitMetadata() {
 }
 
 func (m *rebaseModel) loadDiff(hash string) {
-	cmd := exec.Command("git", "show", "--no-color", "--patch", "--no-stat", hash)
+	cmd := exec.Command("git", "show", "--no-color", "--patch", "--format=", hash)
 	output, err := cmd.Output()
 	if err != nil {
 		m.diffErr = fmt.Errorf("git show failed: %v", err)
