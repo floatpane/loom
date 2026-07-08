@@ -1,0 +1,71 @@
+version: 2
+
+git:
+  ignore_tags:
+    - nightly*
+
+before:
+  hooks:
+    - go mod tidy
+
+builds:
+  - id: loom
+    main: .
+    goos:
+      - linux
+      - darwin
+      - windows
+    goarch:
+      - amd64
+      - arm64
+    flags:
+      - -trimpath
+    ldflags:
+      - -s -w -buildid= -X main.version={{.Version}} -X main.commit={{.Commit}} -X main.date={{.Date}}
+    env:
+      - CGO_ENABLED=0
+
+archives:
+  - formats: [tar.gz]
+    name_template: "{{ .ProjectName }}_{{ .Version }}_{{ .Os }}_{{ .Arch }}"
+    format_overrides:
+      - goos: windows
+        formats: ["zip"]
+    files:
+      - LICENSE
+      - README.md
+
+snapshot:
+  version_template: "{{ .Tag }}-next"
+
+checksum:
+  name_template: "checksums.txt"
+
+changelog:
+  use: github-native
+
+release:
+  draft: false
+  prerelease: auto
+  footer: |
+    ---
+    This version is also available on **[Snapcraft](https://snapcraft.io/loom)** and **Homebrew**!
+
+homebrew_casks:
+  - name: loom
+    binaries: [loom]
+    repository:
+      owner: floatpane
+      name: homebrew-loom
+      token: "{{ .Env.BOT_GITHUB_TOKEN }}"
+    commit_author:
+      name: Floatpane Bot
+      email: us@floatpane.com
+    description: "A beautiful Git commit and rebase editor for the terminal."
+    homepage: "https://github.com/floatpane/loom"
+    hooks:
+      post:
+        install: |
+          if OS.mac?
+            system_command "/usr/bin/xattr", args: ["-dr", "com.apple.quarantine", "#{staged_path}/loom"]
+          end

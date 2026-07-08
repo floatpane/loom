@@ -1,0 +1,41 @@
+name: loom
+base: core22
+adopt-info: loom
+summary: A beautiful Git commit and rebase editor for the terminal.
+description: |
+  loom is a lightweight TUI that replaces GIT_EDITOR for writing commit
+  messages and interactive rebasing. It provides syntax-highlighted commit
+  messages, conventional-commit autocomplete, co-author suggestions, a
+  scrollable diff view, and a floating suggestion popup styled after VSCode
+  and nvim-cmp.
+
+grade: stable
+confinement: classic
+architectures:
+  - build-on: [amd64]
+    build-for: [amd64]
+  - build-on: [arm64]
+    build-for: [arm64]
+
+apps:
+  loom:
+    command: bin/loom
+
+parts:
+  loom:
+    plugin: nil
+    source: .
+    build-snaps:
+      - go/1.26/stable
+    build-environment:
+      - CGO_ENABLED: "0"
+    override-pull: |
+      craftctl default
+      if [ -f .nightly ]; then
+        version="nightly"
+      else
+        version="$(git describe --tags --abbrev=0 --exclude='nightly*' 2>/dev/null | sed 's/^v//' || echo 0.1)"
+      fi
+      craftctl set version="$version"
+    override-build: |
+      go build -trimpath -ldflags "-s -w -X main.version=${CRAFT_PART_BUILD_VERSION} -X main.commit=$(git rev-parse --short HEAD 2>/dev/null || echo unknown) -X main.date=$(date -u +%Y-%m-%dT%H:%M:%SZ)" -o "${CRAFT_PART_INSTALL}/bin/loom" .

@@ -1,0 +1,119 @@
+name: CI
+
+on:
+  push:
+    branches: [master]
+  pull_request:
+    branches: [master]
+  merge_group:
+
+jobs:
+  build:
+    runs-on: ${{ matrix.os }}
+    strategy:
+      matrix:
+        os: [ubuntu-latest, windows-latest, macos-latest]
+    steps:
+      - uses: actions/checkout@v7
+      - name: Set up Go
+        uses: actions/setup-go@v6
+        with:
+          go-version: "1.26.4"
+      - name: Tidy modules
+        run: go mod tidy
+      - name: Test
+        run: go test -v ./...
+      - name: Build
+        run: go build -v ./...
+
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - name: Set up Go
+        uses: actions/setup-go@v6
+        with:
+          go-version: "1.26.4"
+      - name: Check formatting
+        run: |
+          unformatted=$(gofmt -l .)
+          if [ -n "$unformatted" ]; then
+            echo "::error::The following files are not formatted with gofmt:"
+            echo "$unformatted"
+            exit 1
+          fi
+      - name: Vet
+        run: go vet ./...
+      - name: golangci-lint
+        uses: golangci/golangci-lint-action@v9
+        with:
+          version: v2.12.2
+          args: --timeout=10m
+          only-new-issues: false
+
+  mod-tidy:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - name: Set up Go
+        uses: actions/setup-go@v6
+        with:
+          go-version: "1.26.4"
+      - name: Check go.mod and go.sum are tidy
+        run: |
+          go mod tidy
+          if ! git diff --quiet go.mod go.sum; then
+            echo "::error::go.mod or go.sum are not tidy. Run 'go mod tidy' and commit the changes."
+            git diff go.mod go.sum
+            exit 1
+          fi
+
+  snap:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - name: Validate snapcraft.yaml
+        run: |
+          sudo snap install snapcraft --classic
+          snapcraft plugins
+          python3 << 'PYEOF'
+          import yaml, sys
+          with open("snapcraft.yaml") as f:
+              snap = yaml.safe_load(f)
+          errors = []
+          for field in ("name", "base", "summary", "description", "parts"):
+              if field not in snap:
+                  errors.append(f"Missing required field: {field}")
+          if "apps" in snap:
+              for app_name, app in snap["apps"].items():
+                  if "command" not in app:
+                      errors.append(f"App '{app_name}' missing 'command'")
+          if "parts" in snap:
+              for part_name, part in snap["parts"].items():
+                  if "plugin" not in part and "override-build" not in part:
+                      errors.append(f"Part '{part_name}' missing 'plugin' or 'override-build'")
+          if errors:
+              for e in errors:
+                  print(f"::error::{e}", file=sys.stderr)
+              sys.exit(1)
+          print("snapcraft.yaml is valid.")
+          PYEOF
+
+  goreleaser:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+      - name: Set up Go
+        uses: actions/setup-go@v6
+        with:
+          go-version: "1.26.4"
+      - name: Install GoReleaser
+        uses: goreleaser/goreleaser-action@v7
+        with:
+          install-only: true
+      - name: Validate release config
+        run: goreleaser check -f .goreleaser.yml
+      - name: Validate preview config
+        run: goreleaser check -f .goreleaser.preview.yml

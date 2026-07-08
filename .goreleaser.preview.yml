@@ -1,0 +1,30 @@
+version: 2
+
+before:
+  hooks:
+    - go mod tidy
+
+builds:
+  - id: loom
+    main: .
+    goos: [linux, darwin, windows]
+    goarch: [amd64, arm64]
+    flags: [-trimpath]
+    ldflags:
+      - -s -w -buildid= -X main.version=preview-{{.ShortCommit}} -X main.commit={{.Commit}} -X main.date={{.Date}}
+    env:
+      - CGO_ENABLED=0
+
+archives:
+  - formats: [tar.gz]
+    name_template: "{{ .ProjectName }}_preview_{{ .Os }}_{{ .Arch }}"
+    format_overrides:
+      - goos: windows
+        formats: ["zip"]
+    files: [LICENSE, README.md]
+
+checksum:
+  name_template: "checksums.txt"
+
+snapshot:
+  version_template: "preview-{{ .ShortCommit }}"

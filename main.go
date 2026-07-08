@@ -8,8 +8,15 @@ import (
 	tea "charm.land/bubbletea/v2"
 )
 
+var (
+	version = "dev"
+	commit  = "none"
+	date    = "unknown"
+)
+
 func main() {
 	if len(os.Args) < 2 {
+		fmt.Fprintf(os.Stderr, "loom %s (commit %s, built %s)\n", version, commit, date)
 		fmt.Fprintln(os.Stderr, "usage: loom <file-path>")
 		os.Exit(2)
 	}
