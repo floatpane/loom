@@ -1,0 +1,21 @@
+changelog:
+  exclude:
+    labels:
+      - "skip-changelog"
+  categories:
+    - title: "New Features"
+      labels: ["enhancement", "feature"]
+    - title: "Bug Fixes"
+      labels: ["bug", "fix"]
+    - title: "Performance Improvements"
+      labels: ["performance"]
+    - title: "Documentation"
+      labels: ["documentation"]
+    - title: "Dependencies"
+      labels: ["dependencies"]
+    - title: "Continuous Integration"
+      labels: ["ci"]
+    - title: "Chores"
+      labels: ["chore"]
+    - title: "Other Changes"
+      labels: ["*"]

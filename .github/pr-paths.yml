@@ -1,0 +1,58 @@
+# Path → label rules for actions/labeler@v6 (PR file paths).
+
+"area/editor":
+  - changed-files:
+      - any-glob-to-any-file:
+          - editor.go
+          - editor_test.go
+          - cursor_test.go
+
+"area/suggestions":
+  - changed-files:
+      - any-glob-to-any-file:
+          - suggest.go
+          - suggest_test.go
+
+"area/rebase":
+  - changed-files:
+      - any-glob-to-any-file:
+          - rebase.go
+
+"area/diff":
+  - changed-files:
+      - any-glob-to-any-file:
+          - diffview.go
+          - diffview_test.go
+
+"area/commit":
+  - changed-files:
+      - any-glob-to-any-file:
+          - commit.go
+
+"area/build":
+  - changed-files:
+      - any-glob-to-any-file:
+          - snapcraft.yaml
+          - .goreleaser*
+          - Makefile
+
+"area/docs":
+  - changed-files:
+      - any-glob-to-any-file:
+          - README.md
+          - "*.md"
+          - .github/*.md
+
+"ci":
+  - changed-files:
+      - any-glob-to-any-file:
+          - .github/workflows/**
+          - .github/labeler-config.yml
+          - .github/labels.yml
+          - .github/pr-paths.yml
+
+"dependencies":
+  - changed-files:
+      - any-glob-to-any-file:
+          - go.mod
+          - go.sum

@@ -1,0 +1,51 @@
+name: "Label Sync"
+
+on:
+  push:
+    branches: [master]
+    paths:
+      - .github/labels.yml
+      - .github/workflows/label-sync.yml
+  workflow_dispatch:
+    inputs:
+      prune:
+        description: "Delete labels not in labels.yml"
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+  issues: write
+  pull-requests: write
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    env:
+      GH_TOKEN: ${{ secrets.BOT_GITHUB_TOKEN }}
+      LABELS_FILE: .github/labels.yml
+      PRUNE: ${{ github.event.inputs.prune || 'false' }}
+    steps:
+      - uses: actions/checkout@v7
+      - name: Upsert labels
+        run: |
+          set -euo pipefail
+          count=$(yq '. | length' "$LABELS_FILE")
+          for i in $(seq 0 $((count - 1))); do
+            name=$(yq ".[$i].name" "$LABELS_FILE")
+            color=$(yq ".[$i].color" "$LABELS_FILE")
+            description=$(yq ".[$i].description // \"\"" "$LABELS_FILE")
+            gh label create "$name" --repo "$GITHUB_REPOSITORY" --color "$color" --description "$description" --force
+          done
+      - name: Prune extra labels
+        if: env.PRUNE == 'true'
+        run: |
+          set -euo pipefail
+          existing=$(gh label list --repo "$GITHUB_REPOSITORY" --json name -q '.[].name')
+          kept=$(yq '.[].name' "$LABELS_FILE")
+          for label in $existing; do
+            if ! echo "$kept" | grep -qx "$label"; then
+              echo "Pruning label: $label"
+              gh label delete "$label" --repo "$GITHUB_REPOSITORY" --yes || true
+            fi
+          done

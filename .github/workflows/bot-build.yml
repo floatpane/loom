@@ -1,0 +1,147 @@
+name: "Bot - /build"
+
+on:
+  issue_comment:
+    types: [created]
+
+permissions:
+  contents: read
+  pull-requests: write
+  issues: write
+
+jobs:
+  build:
+    if: >-
+      github.event.issue.pull_request &&
+      contains(github.event.comment.body, '/build')
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check org membership
+        uses: actions/github-script@v9
+        with:
+          github-token: ${{ secrets.BOT_GITHUB_TOKEN }}
+          script: |
+            const user = context.payload.comment.user.login;
+            try {
+              const { status } = await github.rest.orgs.checkMembershipForUser({
+                org: 'floatpane',
+                username: user
+              });
+              if (status !== 204 && status !== 302) {
+                core.setFailed(`@${user} is not a member of the floatpane org.`);
+              }
+            } catch (e) {
+              await github.rest.reactions.createForIssueComment({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                comment_id: context.payload.comment.id,
+                content: '-1'
+              });
+              core.setFailed(`@${user} is not a member of the floatpane org.`);
+            }
+
+      - name: React to comment
+        uses: actions/github-script@v9
+        with:
+          github-token: ${{ secrets.BOT_GITHUB_TOKEN }}
+          script: |
+            await github.rest.reactions.createForIssueComment({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              comment_id: context.payload.comment.id,
+              content: 'rocket'
+            });
+
+      - name: Get PR ref
+        id: pr
+        uses: actions/github-script@v9
+        with:
+          github-token: ${{ secrets.BOT_GITHUB_TOKEN }}
+          script: |
+            const { data: pr } = await github.rest.pulls.get({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              pull_number: context.issue.number
+            });
+            core.setOutput('ref', pr.head.ref);
+            core.setOutput('sha', pr.head.sha);
+            core.setOutput('repo', pr.head.repo.full_name);
+
+      - name: Checkout
+        uses: actions/checkout@v7
+        with:
+          repository: ${{ steps.pr.outputs.repo }}
+          ref: ${{ steps.pr.outputs.ref }}
+          fetch-depth: 0
+
+      - name: Set up Go
+        uses: actions/setup-go@v6
+        with:
+          go-version: "1.26.4"
+
+      - name: Build with GoReleaser (snapshot)
+        uses: goreleaser/goreleaser-action@v7
+        with:
+          version: latest
+          args: release --snapshot --clean --config .goreleaser.preview.yml
+        env:
+          GITHUB_TOKEN: ${{ secrets.BOT_GITHUB_TOKEN }}
+
+      - name: Create preview release and upload assets
+        id: release
+        env:
+          GH_TOKEN: ${{ secrets.BOT_GITHUB_TOKEN }}
+        run: |
+          TAG="preview-pr${{ github.event.issue.number }}"
+          SHA="${{ steps.pr.outputs.sha }}"
+          SHORT_SHA="${SHA:0:7}"
+
+          gh release delete "$TAG" --yes --cleanup-tag -R "${{ github.repository }}" 2>/dev/null || true
+
+          gh release create "$TAG" dist/*.tar.gz dist/*.zip dist/checksums.txt \
+            --title "Preview Build (PR #${{ github.event.issue.number }} @ ${SHORT_SHA})" \
+            --notes "Preview build from PR #${{ github.event.issue.number }} at commit ${SHORT_SHA}. **Not for production use.**" \
+            --prerelease \
+            -R "${{ github.repository }}"
+
+          echo "tag=$TAG" >> $GITHUB_OUTPUT
+
+      - name: Post comment with download links
+        uses: actions/github-script@v9
+        with:
+          github-token: ${{ secrets.BOT_GITHUB_TOKEN }}
+          script: |
+            const sha = '${{ steps.pr.outputs.sha }}'.slice(0, 7);
+            const tag = '${{ steps.release.outputs.tag }}';
+            const base = `${context.serverUrl}/${context.repo.owner}/${context.repo.repo}/releases/download/${tag}`;
+
+            const files = [
+              ['Linux', 'amd64', 'loom_preview_linux_amd64.tar.gz'],
+              ['Linux', 'arm64', 'loom_preview_linux_arm64.tar.gz'],
+              ['macOS', 'amd64', 'loom_preview_darwin_amd64.tar.gz'],
+              ['macOS', 'arm64', 'loom_preview_darwin_arm64.tar.gz'],
+              ['Windows', 'amd64', 'loom_preview_windows_amd64.zip'],
+              ['Windows', 'arm64', 'loom_preview_windows_arm64.zip'],
+            ];
+
+            const rows = files.map(([os, arch, file]) =>
+              `| ${os} | ${arch} | [${file}](${base}/${file}) |`
+            ).join('\n');
+
+            const body = [
+              `### Build complete (\`${sha}\`)`,
+              '',
+              '> [!WARNING]',
+              '> This is an **unreviewed PR build** and has not been security audited. It may contain bugs, vulnerabilities, or malicious code. **Do not use for daily use.** Only use for testing purposes.',
+              '',
+              '| OS | Arch | Download |',
+              '|---|---|---|',
+              rows,
+            ].join('\n');
+
+            await github.rest.issues.createComment({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: context.issue.number,
+              body
+            });
