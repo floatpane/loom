@@ -116,15 +116,15 @@ func funcRule() hlRule {
 }
 
 func goStringRule() hlRule {
-	return mustRule("`[^`]*`" + `|"(?:\\.|[^"\\])*"` + `|'(?:\\.|[^'\\])*'`, tokString)
+	return mustRule("`[^`]*`"+`|"(?:\\.|[^"\\])*"`+`|'(?:\\.|[^'\\])*'`, tokString)
 }
 
 func jsStringRule() hlRule {
-	return mustRule("`(?:\\.|[^`\\])*`" + `|"(?:\\.|[^"\\])*"` + `|'(?:\\.|[^'\\])*'`, tokString)
+	return mustRule("`(?:\\.|[^`\\])*`"+`|"(?:\\.|[^"\\])*"`+`|'(?:\\.|[^'\\])*'`, tokString)
 }
 
 func pyStringRule() hlRule {
-	return mustRule(`"""[\s\S]*?"""|'''[\s\S]*?'''` + `|"(?:\\.|[^"\\])*"` + `|'(?:\\.|[^'\\])*'`, tokString)
+	return mustRule(`"""[\s\S]*?"""|'''[\s\S]*?'''`+`|"(?:\\.|[^"\\])*"`+`|'(?:\\.|[^'\\])*'`, tokString)
 }
 
 func languageRules(lang string) []hlRule {
@@ -367,12 +367,6 @@ func highlightCode(code, lang string) string {
 func langFromPath(path string) string {
 	ext := strings.TrimPrefix(filepath.Ext(path), ".")
 	return normalizeLang(ext)
-}
-
-// detectLangFromPath returns a language hint for syntax highlighting from
-// a file path. Returns "" for unknown/unsupported extensions.
-func detectLangFromPath(path string) string {
-	return langFromPath(path)
 }
 
 // --- ANSI reset rewriting (from matcha) ---
@@ -644,10 +638,8 @@ func parseUnifiedDiff(diff string) []diffFileChange {
 			if curHunk != nil {
 				curHunk.lines = append(curHunk.lines, diffLine{kind: diffContext, text: line[1:]})
 			}
-		case strings.HasPrefix(line, "\\"):
-			// "\ No newline at end of file" — skip
 		default:
-			// skip other lines (index, mode, etc.)
+			// skip other lines (index, mode, "\ No newline", etc.)
 		}
 	}
 

@@ -7,8 +7,8 @@ import (
 	"strings"
 	"time"
 
-	tea "charm.land/bubbletea/v2"
 	"charm.land/bubbles/v2/viewport"
+	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
 )
 
@@ -344,7 +344,6 @@ func (m *commitModel) View() tea.View {
 
 	sections = append(sections, footer)
 	content := lipgloss.JoinVertical(lipgloss.Left, sections...)
-
 
 	v := tea.NewView(content)
 	v.AltScreen = true

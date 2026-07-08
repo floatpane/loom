@@ -5,8 +5,8 @@ import (
 	"strings"
 	"unicode/utf8"
 
-	tea "charm.land/bubbletea/v2"
 	"charm.land/bubbles/v2/viewport"
+	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
 	"github.com/floatpane/bubble-overlay"
 )
@@ -72,9 +72,6 @@ func (e *editor) syncToViewport() {
 func (e *editor) ensureVisible() {
 	e.vp.EnsureVisible(e.row, e.col, e.col+1)
 }
-
-func (e *editor) line() int    { return e.row }
-func (e *editor) column() int  { return e.col }
 
 // --- Editing operations ---
 
@@ -522,7 +519,6 @@ func insertCursorInColored(s string, col int) string {
 				b.WriteString(currentSGR.String())
 			}
 			i += size
-			visible++
 			// Copy the rest
 			b.WriteString(s[i:])
 			return b.String()

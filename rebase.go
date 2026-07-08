@@ -8,8 +8,8 @@ import (
 	"strings"
 	"time"
 
-	tea "charm.land/bubbletea/v2"
 	"charm.land/bubbles/v2/viewport"
+	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
 )
 
@@ -22,17 +22,17 @@ type rebaseItem struct {
 }
 
 type rebaseModel struct {
-	path     string
-	items    []rebaseItem
-	cursor   int
-	width    int
-	height   int
-	saved    bool
-	err      error
-	expanded int // -1 = no item expanded, otherwise index into items
-	diff     string
-	diffErr  error
-	diffVP   viewport.Model
+	path      string
+	items     []rebaseItem
+	cursor    int
+	width     int
+	height    int
+	saved     bool
+	err       error
+	expanded  int // -1 = no item expanded, otherwise index into items
+	diff      string
+	diffErr   error
+	diffVP    viewport.Model
 	diffReady bool
 }
 
@@ -50,7 +50,7 @@ func (m *rebaseModel) load() {
 		m.err = err
 		return
 	}
-	defer f.Close()
+	defer func() { _ = f.Close() }()
 
 	scanner := bufio.NewScanner(f)
 	for scanner.Scan() {
@@ -353,7 +353,7 @@ func (m *rebaseModel) View() tea.View {
 		action := actionStyle(it.action).Render(it.action)
 		hash := lipgloss.NewStyle().Foreground(lipgloss.Color("243")).Render(it.hash)
 
-		msg := it.msg
+		var msg string
 		if m.expanded == i {
 			msg = lipgloss.NewStyle().Bold(true).Render(it.msg)
 		} else {

@@ -204,8 +204,10 @@ func (ps *peopleStore) save() {
 	if err != nil {
 		return
 	}
-	os.MkdirAll(filepath.Dir(ps.filePath), 0755)
-	os.WriteFile(ps.filePath, data, 0644)
+	if err := os.MkdirAll(filepath.Dir(ps.filePath), 0755); err != nil {
+		return
+	}
+	_ = os.WriteFile(ps.filePath, data, 0644)
 }
 
 // addPerson adds a person to the store if not already present.
@@ -289,7 +291,7 @@ func loadCoAuthors() []coAuthor {
 	ps := newPeopleStore()
 	result := make([]coAuthor, len(ps.people))
 	for i, p := range ps.people {
-		result[i] = coAuthor{name: p.name, email: p.email}
+		result[i] = coAuthor(p)
 	}
 	return result
 }
