@@ -13,21 +13,22 @@ import (
 )
 
 type commitModel struct {
-	path      string
-	editor    *editor
-	diffVP    viewport.Model
-	diffRaw   string
-	diffReady bool
-	infoLines []string
-	infoRaw   string
-	author    string
-	date      time.Time
-	people    *peopleStore
-	width     int
-	height    int
-	saved     bool
-	err       error
-	diffFocus bool
+	path        string
+	editor      *editor
+	diffVP      viewport.Model
+	diffRaw     string
+	diffReady   bool
+	diffFromGit bool
+	infoLines   []string
+	infoRaw     string
+	author      string
+	date        time.Time
+	people      *peopleStore
+	width       int
+	height      int
+	saved       bool
+	err         error
+	diffFocus   bool
 }
 
 func newCommitModel(path string) *commitModel {
@@ -109,7 +110,24 @@ func (m *commitModel) parseCommitFile(content string) {
 	if diffStart < len(lines) {
 		m.diffRaw = strings.Join(lines[diffStart:], "\n")
 		m.prepareDiffView()
+	} else {
+		m.loadDiffFromGit()
 	}
+}
+
+func (m *commitModel) loadDiffFromGit() {
+	cmd := exec.Command("git", "diff", "--cached", "--no-color")
+	output, err := cmd.Output()
+	if err != nil {
+		return
+	}
+	diff := strings.TrimSpace(string(output))
+	if diff == "" {
+		return
+	}
+	m.diffRaw = diff
+	m.diffFromGit = true
+	m.prepareDiffView()
 }
 
 func (m *commitModel) prepareDiffView() {
@@ -223,7 +241,7 @@ func (m *commitModel) save() tea.Cmd {
 	if m.infoRaw != "" {
 		content = content + "\n" + m.infoRaw + "\n"
 	}
-	if m.diffRaw != "" {
+	if m.diffRaw != "" && !m.diffFromGit {
 		content = content + m.diffRaw
 	}
 	if err := os.WriteFile(m.path, []byte(content), 0644); err != nil {
