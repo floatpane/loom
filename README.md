@@ -81,6 +81,28 @@ GIT_EDITOR=loom git rebase -i HEAD~5
 loom automatically detects whether the file is a `git-rebase-todo` or a
 commit message and launches the appropriate interface.
 
+### Rebase command
+
+loom also includes a convenience rebase command that fetches and rebases
+the current branch onto its upstream default branch:
+
+```bash
+loom rebase
+```
+
+This fetches the latest changes from the current branch's upstream remote
+and rebases onto `upstream/<default-branch>` (or the current remote's
+default branch if no upstream is configured).
+
+To rebase a specific PR's branch without leaving your current branch:
+
+```bash
+loom rebase pr 123
+```
+
+This checks out PR #123's branch, rebases it onto its upstream, then
+returns you to the branch you were on.
+
 
 ## Contributing
 
