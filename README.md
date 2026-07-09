@@ -1,5 +1,7 @@
 <div align="center">
 
+<img src="assets/logo.png" alt="Logo">
+
 # loom
 
 A beautiful Git commit and rebase editor for the terminal.
