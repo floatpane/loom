@@ -29,6 +29,7 @@ type commitModel struct {
 	saved       bool
 	err         error
 	diffFocus   bool
+	fullscreen  bool
 }
 
 func newCommitModel(path string) *commitModel {
@@ -175,6 +176,13 @@ func (m *commitModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			case "esc", "tab":
 				m.diffFocus = false
 				m.editor.focused = true
+				if m.fullscreen {
+					m.layout()
+				}
+				return m, nil
+			case "ctrl+f":
+				m.fullscreen = !m.fullscreen
+				m.layout()
 				return m, nil
 			case "up", "k":
 				m.diffVP.ScrollUp(1)
@@ -208,6 +216,10 @@ func (m *commitModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				return m, nil
 			}
 			return m, tea.Quit
+		case "ctrl+f":
+			m.fullscreen = !m.fullscreen
+			m.layout()
+			return m, nil
 		case "tab":
 			if len(m.editor.suggestions) > 0 && m.editor.selSug >= 0 {
 				m.editor.acceptSuggestion()
@@ -216,6 +228,9 @@ func (m *commitModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			if m.diffReady {
 				m.diffFocus = true
 				m.editor.focused = false
+				if m.fullscreen {
+					m.layout()
+				}
 			}
 			return m, nil
 		}
@@ -253,9 +268,20 @@ func (m *commitModel) save() tea.Cmd {
 }
 
 func (m *commitModel) layout() {
-	headerHeight := 3 // header line + padding
-	footerHeight := 3 // footer line + padding
+	headerHeight := 1
+	footerHeight := 1
 	bodyHeight := m.height - headerHeight - footerHeight
+
+	if m.fullscreen {
+		if m.diffFocus && m.diffReady {
+			m.diffVP.SetWidth(m.width)
+			m.diffVP.SetHeight(bodyHeight)
+		} else {
+			m.editor.setWidth(m.width)
+			m.editor.setHeight(bodyHeight)
+		}
+		return
+	}
 
 	if m.diffReady {
 		diffHeight := min(bodyHeight/2, 20)
@@ -269,7 +295,7 @@ func (m *commitModel) layout() {
 				infoHeight = 10
 			}
 		}
-		editorHeight := bodyHeight - diffHeight - infoHeight - 2
+		editorHeight := bodyHeight - diffHeight - infoHeight - 3
 		if editorHeight < 3 {
 			editorHeight = 3
 		}
@@ -286,7 +312,7 @@ func (m *commitModel) layout() {
 				infoHeight = 10
 			}
 		}
-		editorHeight := bodyHeight - infoHeight - 1
+		editorHeight := bodyHeight - infoHeight
 		if editorHeight < 3 {
 			editorHeight = 3
 		}
@@ -313,9 +339,22 @@ func (m *commitModel) View() tea.View {
 		focusLabel = "diff"
 	}
 
-	statusText := fmt.Sprintf("ctrl+s save  •  esc cancel  •  %d lines  %d words", lineCount, wordCount)
-	if m.diffReady {
-		statusText = fmt.Sprintf("ctrl+s save  •  esc cancel  •  %d lines  %d words  •  tab: focus %s", lineCount, wordCount, focusLabel)
+	fsLabel := "fullscreen"
+	if m.fullscreen {
+		fsLabel = "unfullscreen"
+	}
+
+	var statusText string
+	if m.fullscreen {
+		statusText = fmt.Sprintf("ctrl+s save  •  esc cancel  •  ctrl+f %s", fsLabel)
+		if m.diffReady {
+			statusText += fmt.Sprintf("  •  tab: focus %s", focusLabel)
+		}
+	} else {
+		statusText = fmt.Sprintf("ctrl+s save  •  esc cancel  •  ctrl+f %s  •  %d lines  %d words", fsLabel, lineCount, wordCount)
+		if m.diffReady {
+			statusText = fmt.Sprintf("ctrl+s save  •  esc cancel  •  ctrl+f %s  •  %d lines  %d words  •  tab: focus %s", fsLabel, lineCount, wordCount, focusLabel)
+		}
 	}
 	if m.saved {
 		statusText = "saved!"
@@ -330,38 +369,55 @@ func (m *commitModel) View() tea.View {
 		Width(m.width).
 		Render(statusText)
 
-	editorBody := m.editor.view()
+	var contentSections []string
+	contentSections = append(contentSections, header)
 
-	var sections []string
-	sections = append(sections, header, editorBody)
-
-	if len(m.infoLines) > 0 {
-		sections = append(sections, m.renderInfoPanel())
-	}
-
-	if m.diffReady {
-		divLabel := " diff "
-		if m.diffFocus {
-			divLabel = " diff (focused) "
+	if m.fullscreen {
+		if m.diffFocus && m.diffReady {
+			contentSections = append(contentSections, m.diffVP.View())
+		} else {
+			contentSections = append(contentSections, m.editor.view())
 		}
-		divider := lipgloss.NewStyle().
-			Foreground(lipgloss.Color("238")).
-			Background(lipgloss.Color("236")).
-			Width(m.width).
-			Render(strings.Repeat("─", 4) + divLabel + strings.Repeat("─", max(0, m.width-4-len(divLabel))))
+	} else {
+		contentSections = append(contentSections, m.editor.view())
 
-		diffContent := m.diffVP.View()
-		diffBox := lipgloss.NewStyle().
-			Border(lipgloss.RoundedBorder()).
-			BorderForeground(lipgloss.Color("238")).
-			Padding(0, 0).
-			Render(diffContent)
+		if len(m.infoLines) > 0 {
+			contentSections = append(contentSections, m.renderInfoPanel())
+		}
 
-		sections = append(sections, divider, diffBox)
+		if m.diffReady {
+			divLabel := " diff "
+			if m.diffFocus {
+				divLabel = " diff (focused) "
+			}
+			divider := lipgloss.NewStyle().
+				Foreground(lipgloss.Color("238")).
+				Background(lipgloss.Color("236")).
+				Width(m.width).
+				Render(strings.Repeat("─", 4) + divLabel + strings.Repeat("─", max(0, m.width-4-len(divLabel))))
+
+			diffContent := m.diffVP.View()
+			diffBox := lipgloss.NewStyle().
+				Border(lipgloss.RoundedBorder()).
+				BorderForeground(lipgloss.Color("238")).
+				Padding(0, 0).
+				Render(diffContent)
+
+			contentSections = append(contentSections, divider, diffBox)
+		}
 	}
 
-	sections = append(sections, footer)
-	content := lipgloss.JoinVertical(lipgloss.Left, sections...)
+	contentAbove := lipgloss.JoinVertical(lipgloss.Left, contentSections...)
+	contentHeight := strings.Count(contentAbove, "\n") + 1
+	footerHeight := strings.Count(footer, "\n") + 1
+	padLines := m.height - contentHeight - footerHeight
+	if padLines < 0 {
+		padLines = 0
+	}
+
+	allSections := append(contentSections, make([]string, padLines)...)
+	allSections = append(allSections, footer)
+	content := lipgloss.JoinVertical(lipgloss.Left, allSections...)
 
 	v := tea.NewView(content)
 	v.AltScreen = true
