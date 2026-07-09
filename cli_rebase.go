@@ -108,47 +108,16 @@ func defaultBranchForRemote(remote string) (string, error) {
 	return branch, nil
 }
 
-// rebaseUpstream determines the upstream ref to rebase onto and runs the
-// rebase. It fetches the target remote first.
-//
-// Logic:
-//  1. Find the current branch's configured upstream (e.g. origin/main).
-//  2. If upstream exists, fetch that remote and rebase onto upstream ref.
-//  3. If no upstream, fall back to the current remote's default branch.
+// rebaseUpstream rebases the current branch onto the remote's default branch
+// (e.g. origin/main). It fetches the remote first.
 func rebaseUpstream() error {
 	branch, err := currentBranch()
 	if err != nil {
 		return err
 	}
 
-	// Try configured upstream for the current branch.
-	upstream, _ := gitOutput("rev-parse", "--abbrev-ref", branch+"@{u}")
-
-	if upstream != "" {
-		// upstream is like "origin/main"
-		parts := strings.SplitN(upstream, "/", 2)
-		remote := parts[0]
-		if len(parts) < 2 {
-			return fmt.Errorf("unexpected upstream format: %s", upstream)
-		}
-
-		if !remoteExists(remote) {
-			return fmt.Errorf("upstream remote %q does not exist", remote)
-		}
-
-		fmt.Fprintf(os.Stderr, "Fetching %s...\n", remote)
-		if err := gitRun("fetch", remote); err != nil {
-			return fmt.Errorf("fetch %s: %w", remote, err)
-		}
-
-		fmt.Fprintf(os.Stderr, "Rebasing %s onto %s...\n", branch, upstream)
-		return gitRun("rebase", upstream)
-	}
-
-	// No upstream configured. Fall back to current remote's default branch.
 	remote := "origin"
 	if !remoteExists(remote) {
-		// Pick the first available remote.
 		out, err := gitOutput("remote")
 		if err != nil || out == "" {
 			return fmt.Errorf("no remotes configured")
@@ -180,10 +149,11 @@ func rebasePR(number int) error {
 	}
 
 	// Find the PR's head branch name.
-	out, err := gitOutput("gh", "pr", "view", strconv.Itoa(number), "--json", "headRefName")
+	prOut, err := exec.Command("gh", "pr", "view", strconv.Itoa(number), "--json", "headRefName").Output()
 	if err != nil {
 		return fmt.Errorf("gh pr view %d: %w", number, err)
 	}
+	out := strings.TrimSpace(string(prOut))
 	branch := parseJSONField(out, "headRefName")
 	if branch == "" {
 		return fmt.Errorf("could not determine PR branch name from gh output")
@@ -202,7 +172,7 @@ func rebasePR(number int) error {
 		return fmt.Errorf("checkout %s: %w", branch, err)
 	}
 
-	fmt.Fprintln(os.Stderr, "Rebasing onto upstream...")
+	fmt.Fprintf(os.Stderr, "Rebasing %s onto upstream...\n", branch)
 	if err := rebaseUpstream(); err != nil {
 		return err
 	}
