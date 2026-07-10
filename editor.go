@@ -26,16 +26,30 @@ type editor struct {
 	suggestions []suggestion
 	selSug      int
 	people      *peopleStore
+
+	// undo/redo stacks
+	undoStack [][]string
+	redoStack [][]string
+	undoRow   int
+	undoCol   int
+
+	// search state
+	searchQuery  string
+	searchActive bool
+
+	// display options
+	showLineNums bool
 }
 
 func newEditor() *editor {
 	vp := viewport.New()
 	vp.SoftWrap = false
 	return &editor{
-		vp:      vp,
-		lines:   []string{""},
-		focused: true,
-		selSug:  -1,
+		vp:          vp,
+		lines:       []string{""},
+		focused:     true,
+		selSug:      -1,
+		showLineNums: false,
 	}
 }
 
@@ -246,6 +260,216 @@ func (e *editor) deleteWordBackward() {
 	e.syncToViewport()
 }
 
+// --- Undo / Redo ---
+
+func (e *editor) snapshot() {
+	// Deep copy lines
+	cp := make([]string, len(e.lines))
+	copy(cp, e.lines)
+	e.undoStack = append(e.undoStack, cp)
+	e.undoRow = e.row
+	e.undoCol = e.col
+	// Limit stack size
+	if len(e.undoStack) > 100 {
+		e.undoStack = e.undoStack[1:]
+	}
+	// Clear redo stack on new edit
+	e.redoStack = nil
+}
+
+func (e *editor) undo() {
+	if len(e.undoStack) == 0 {
+		return
+	}
+	// Push current state to redo
+	cp := make([]string, len(e.lines))
+	copy(cp, e.lines)
+	e.redoStack = append(e.redoStack, cp)
+
+	prev := e.undoStack[len(e.undoStack)-1]
+	e.undoStack = e.undoStack[:len(e.undoStack)-1]
+	e.lines = make([]string, len(prev))
+	copy(e.lines, prev)
+	if e.undoRow < len(e.lines) {
+		e.row = e.undoRow
+	} else {
+		e.row = len(e.lines) - 1
+	}
+	e.col = e.undoCol
+	e.clampCol()
+	e.syncToViewport()
+}
+
+func (e *editor) redo() {
+	if len(e.redoStack) == 0 {
+		return
+	}
+	cp := make([]string, len(e.lines))
+	copy(cp, e.lines)
+	e.undoStack = append(e.undoStack, cp)
+
+	next := e.redoStack[len(e.redoStack)-1]
+	e.redoStack = e.redoStack[:len(e.redoStack)-1]
+	e.lines = make([]string, len(next))
+	copy(e.lines, next)
+	if e.row >= len(e.lines) {
+		e.row = len(e.lines) - 1
+	}
+	e.clampCol()
+	e.syncToViewport()
+}
+
+// --- Auto-continue bullet lists ---
+
+func (e *editor) autoContinueBullet() {
+	if e.row <= 0 || e.row >= len(e.lines) {
+		return
+	}
+	prevLine := e.lines[e.row-1]
+	trimmed := strings.TrimLeft(prevLine, " \t")
+	if !strings.HasPrefix(trimmed, "- ") && !strings.HasPrefix(trimmed, "* ") {
+		return
+	}
+	// If previous line is just the bullet with no content, remove it
+	content := strings.TrimSpace(trimmed[2:])
+	if content == "" {
+		// Remove the empty bullet line
+		e.lines = append(e.lines[:e.row-1], e.lines[e.row:]...)
+		e.row--
+		e.col = 0
+		e.syncToViewport()
+		return
+	}
+	// Insert a new bullet line with the same indentation
+	indent := prevLine[:len(prevLine)-len(trimmed)]
+	bullet := string(trimmed[0]) + " "
+	newLine := indent + bullet
+	// Insert at current row position (which is a blank line just added)
+	e.lines[e.row] = newLine
+	e.col = len([]rune(newLine))
+	e.syncToViewport()
+}
+
+// --- Transpose characters ---
+
+func (e *editor) transposeChars() {
+	if e.row < 0 || e.row >= len(e.lines) {
+		return
+	}
+	runes := []rune(e.lines[e.row])
+	if len(runes) < 2 {
+		return
+	}
+	if e.col == 0 {
+		// Transpose last two chars of line
+		if len(runes) >= 2 {
+			runes[len(runes)-2], runes[len(runes)-1] = runes[len(runes)-1], runes[len(runes)-2]
+		}
+	} else if e.col >= len(runes) {
+		runes[len(runes)-2], runes[len(runes)-1] = runes[len(runes)-1], runes[len(runes)-2]
+		e.col = len(runes)
+	} else {
+		runes[e.col-1], runes[e.col] = runes[e.col], runes[e.col-1]
+		e.col++
+	}
+	e.lines[e.row] = string(runes)
+	e.syncToViewport()
+}
+
+// --- Go to line ---
+
+func (e *editor) gotoLine(n int) {
+	if n < 0 {
+		n = 0
+	}
+	if n >= len(e.lines) {
+		n = len(e.lines) - 1
+	}
+	e.row = n
+	e.col = 0
+	e.ensureVisible()
+}
+
+// --- Duplicate line ---
+
+func (e *editor) duplicateLine() {
+	if e.row < 0 || e.row >= len(e.lines) {
+		return
+	}
+	dup := e.lines[e.row]
+	e.lines = append(e.lines[:e.row+1], append([]string{dup}, e.lines[e.row+1:]...)...)
+	e.row++
+	e.syncToViewport()
+}
+
+// --- Move line up/down ---
+
+func (e *editor) moveLineUp() {
+	if e.row <= 0 {
+		return
+	}
+	e.lines[e.row-1], e.lines[e.row] = e.lines[e.row], e.lines[e.row-1]
+	e.row--
+	e.syncToViewport()
+}
+
+func (e *editor) moveLineDown() {
+	if e.row >= len(e.lines)-1 {
+		return
+	}
+	e.lines[e.row], e.lines[e.row+1] = e.lines[e.row+1], e.lines[e.row]
+	e.row++
+	e.syncToViewport()
+}
+
+// --- Search ---
+
+func (e *editor) searchNext() {
+	if e.searchQuery == "" {
+		return
+	}
+	query := strings.ToLower(e.searchQuery)
+	// Search from current position forward
+	for i := e.row; i < len(e.lines); i++ {
+		line := strings.ToLower(e.lines[i])
+		startCol := 0
+		if i == e.row {
+			startCol = e.col + 1
+		}
+		idx := strings.Index(line[startCol:], query)
+		if idx >= 0 {
+			e.row = i
+			e.col = startCol + idx
+			e.ensureVisible()
+			return
+		}
+	}
+	// Wrap around
+	for i := 0; i <= e.row; i++ {
+		line := strings.ToLower(e.lines[i])
+		endCol := len(line)
+		if i == e.row {
+			endCol = e.col
+		}
+		idx := strings.Index(line[:endCol], query)
+		if idx >= 0 {
+			e.row = i
+			e.col = idx
+			e.ensureVisible()
+			return
+		}
+	}
+}
+
+// --- Select all (just moves cursor to start, for clearing) ---
+
+func (e *editor) selectAllClear() {
+	e.lines = []string{""}
+	e.row = 0
+	e.col = 0
+	e.syncToViewport()
+}
+
 func (e *editor) clampCol() {
 	if e.row < 0 || e.row >= len(e.lines) {
 		return
@@ -300,23 +524,45 @@ func (e *editor) handleKey(msg tea.KeyPressMsg) bool {
 	case "ctrl+right", "alt+f":
 		e.wordForward()
 	case "backspace", "ctrl+h":
+		e.snapshot()
 		e.deleteBackward()
 	case "delete":
+		e.snapshot()
 		e.deleteForward()
 	case "ctrl+d":
-		e.vp.HalfPageDown()
-		e.row = e.vp.YOffset()
-		e.clampCol()
+		e.duplicateLine()
 	case "ctrl+k":
 		if e.row >= 0 && e.row < len(e.lines) {
 			runes := []rune(e.lines[e.row])
 			if e.col < len(runes) {
+				e.snapshot()
 				e.lines[e.row] = string(runes[:e.col])
 				e.syncToViewport()
 			}
 		}
 	case "enter":
+		e.snapshot()
 		e.insertNewline()
+		// Auto-continue bullet lists
+		e.autoContinueBullet()
+	case "ctrl+z":
+		e.undo()
+	case "ctrl+y", "ctrl+shift+z":
+		e.redo()
+	case "ctrl+t":
+		e.transposeChars()
+	case "alt+up":
+		e.moveLineUp()
+	case "alt+down":
+		e.moveLineDown()
+	case "ctrl+g":
+		// Goto line — toggled externally, no-op here
+	case "ctrl+l":
+		// Select all / clear
+		e.selectAllClear()
+	case "ctrl+n":
+		// Search next
+		e.searchNext()
 	case "pgup":
 		e.vp.PageUp()
 		e.row = e.vp.YOffset()
@@ -330,6 +576,7 @@ func (e *editor) handleKey(msg tea.KeyPressMsg) bool {
 		e.row = e.vp.YOffset()
 		e.clampCol()
 	case "ctrl+w":
+		e.snapshot()
 		e.deleteWordBackward()
 	default:
 		key := tea.Key(msg)
@@ -555,12 +802,18 @@ func (e *editor) renderSuggestionPopup() []string {
 		"word":    "Text",
 		"person":  "Person",
 		"trailer": "Trailer",
+		"scope":   "Scope",
+		"gitmoji": "Emoji",
+		"issue":   "Issue",
 	}
 	kindColor := map[string]color.Color{
 		"type":    lipgloss.Color("42"),
 		"word":    lipgloss.Color("39"),
 		"person":  lipgloss.Color("99"),
 		"trailer": lipgloss.Color("141"),
+		"scope":   lipgloss.Color("213"),
+		"gitmoji": lipgloss.Color("214"),
+		"issue":   lipgloss.Color("203"),
 	}
 
 	selectedBg := lipgloss.Color("62")
