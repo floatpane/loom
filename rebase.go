@@ -11,6 +11,7 @@ import (
 	"charm.land/bubbles/v2/viewport"
 	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
+	"github.com/floatpane/bubble-overlay"
 )
 
 type rebaseItem struct {
@@ -19,25 +20,30 @@ type rebaseItem struct {
 	msg    string
 	author string
 	date   time.Time
+	// For exec/break/label/reset/merge commands, hash may be empty and
+	// msg holds the command or label text.
 }
 
 type rebaseModel struct {
-	path      string
-	items     []rebaseItem
-	cursor    int
-	width     int
-	height    int
-	saved     bool
-	err       error
-	expanded  int // -1 = no item expanded, otherwise index into items
-	diff      string
-	diffErr   error
-	diffVP    viewport.Model
-	diffReady bool
+	path       string
+	items      []rebaseItem
+	cursor     int
+	width      int
+	height     int
+	saved      bool
+	err        error
+	expanded   int // -1 = no item expanded, otherwise index into items
+	diff       string
+	diffErr    error
+	diffVP     viewport.Model
+	diffReady  bool
+	helpVisible bool
+	searchQuery string
+	searchActive bool
 }
 
 func newRebaseModel(path string) *rebaseModel {
-	m := &rebaseModel{path: path, expanded: -1}
+	m := &rebaseModel{path: path, expanded: -1, helpVisible: false}
 	m.diffVP = viewport.New()
 	m.diffVP.SoftWrap = false
 	m.load()
@@ -59,13 +65,56 @@ func (m *rebaseModel) load() {
 			continue
 		}
 		fields := strings.Fields(line)
-		if len(fields) < 3 {
+		if len(fields) < 1 {
 			continue
 		}
 		action := fields[0]
-		hash := fields[1]
-		msg := strings.Join(fields[2:], " ")
-		m.items = append(m.items, rebaseItem{action: action, hash: hash, msg: msg})
+		switch action {
+		case "p", "pick", "r", "reword", "e", "edit", "s", "squash",
+			"f", "fixup", "d", "drop", "x", "exec", "b", "break",
+			"l", "label", "t", "reset", "m", "merge", "u", "update-ref":
+			if action == "x" || action == "exec" {
+				// exec command — everything after the action is the command
+				msg := strings.TrimSpace(line[len(action):])
+				m.items = append(m.items, rebaseItem{action: "exec", msg: msg})
+			} else if action == "b" || action == "break" {
+				m.items = append(m.items, rebaseItem{action: "break"})
+			} else if action == "l" || action == "label" {
+				msg := strings.TrimSpace(line[len(action):])
+				m.items = append(m.items, rebaseItem{action: "label", msg: msg})
+			} else if action == "t" || action == "reset" {
+				msg := strings.TrimSpace(line[len(action):])
+				m.items = append(m.items, rebaseItem{action: "reset", msg: msg})
+			} else if action == "m" || action == "merge" {
+				// merge [-C <commit>] <commit> [#<msg>]
+				rest := strings.TrimSpace(line[len(action):])
+				m.items = append(m.items, rebaseItem{action: "merge", msg: rest})
+			} else if action == "u" || action == "update-ref" {
+				m.items = append(m.items, rebaseItem{action: "update-ref"})
+			} else if len(fields) >= 3 {
+				// Normal pick/reword/edit/squash/fixup/drop with hash and msg
+				hash := fields[1]
+				msg := strings.Join(fields[2:], " ")
+				// Normalize short action names
+				switch action {
+				case "p":
+					action = "pick"
+				case "r":
+					action = "reword"
+				case "e":
+					action = "edit"
+				case "s":
+					action = "squash"
+				case "f":
+					action = "fixup"
+				case "d":
+					action = "drop"
+				}
+				m.items = append(m.items, rebaseItem{action: action, hash: hash, msg: msg})
+			}
+		default:
+			// Unknown action, skip
+		}
 	}
 	if err := scanner.Err(); err != nil {
 		m.err = err
@@ -81,7 +130,12 @@ func (m *rebaseModel) loadCommitMetadata() {
 
 	var hashes []string
 	for _, it := range m.items {
-		hashes = append(hashes, it.hash)
+		if it.hash != "" {
+			hashes = append(hashes, it.hash)
+		}
+	}
+	if len(hashes) == 0 {
+		return
 	}
 
 	args := append([]string{"log", "--format=%H%x1f%an%x1f%aI%x1f%s", "--no-patch"}, hashes...)
@@ -91,6 +145,7 @@ func (m *rebaseModel) loadCommitMetadata() {
 		return
 	}
 
+	// Build a map keyed by both full and short (first 7) hashes
 	meta := make(map[string]rebaseItem)
 	for _, line := range strings.Split(string(output), "\n") {
 		if line == "" {
@@ -110,10 +165,19 @@ func (m *rebaseModel) loadCommitMetadata() {
 			date = t
 		}
 
-		meta[hash] = rebaseItem{author: author, date: date, msg: subject}
+		item := rebaseItem{author: author, date: date, msg: subject}
+		meta[hash] = item
+		// Also index by short hash (first 7 chars)
+		if len(hash) >= 7 {
+			meta[hash[:7]] = item
+		}
 	}
 
 	for i := range m.items {
+		if m.items[i].hash == "" {
+			continue
+		}
+		// Try exact match first, then prefix match
 		if info, ok := meta[m.items[i].hash]; ok {
 			if m.items[i].author == "" {
 				m.items[i].author = info.author
@@ -123,6 +187,23 @@ func (m *rebaseModel) loadCommitMetadata() {
 			}
 			if m.items[i].msg == "" || m.items[i].msg == m.items[i].hash {
 				m.items[i].msg = info.msg
+			}
+		} else {
+			// Try matching by prefix: find a key that starts with the short hash
+			shortHash := m.items[i].hash
+			for fullHash, info := range meta {
+				if strings.HasPrefix(fullHash, shortHash) {
+					if m.items[i].author == "" {
+						m.items[i].author = info.author
+					}
+					if m.items[i].date.IsZero() {
+						m.items[i].date = info.date
+					}
+					if m.items[i].msg == "" || m.items[i].msg == m.items[i].hash {
+						m.items[i].msg = info.msg
+					}
+					break
+				}
 			}
 		}
 	}
@@ -180,11 +261,38 @@ func (m *rebaseModel) prepareDiffView() {
 }
 
 func (m *rebaseModel) write() error {
+	content, err := m.writeToString()
+	if err != nil {
+		return err
+	}
+	return os.WriteFile(m.path, []byte(content), 0644)
+}
+
+func (m *rebaseModel) writeToString() (string, error) {
 	var b strings.Builder
 	for _, it := range m.items {
-		fmt.Fprintf(&b, "%s %s %s\n", it.action, it.hash, it.msg)
+		switch it.action {
+		case "exec":
+			fmt.Fprintf(&b, "exec %s\n", it.msg)
+		case "break":
+			fmt.Fprintf(&b, "break\n")
+		case "label":
+			fmt.Fprintf(&b, "label %s\n", it.msg)
+		case "reset":
+			fmt.Fprintf(&b, "reset %s\n", it.msg)
+		case "merge":
+			fmt.Fprintf(&b, "merge %s\n", it.msg)
+		case "update-ref":
+			fmt.Fprintf(&b, "update-ref\n")
+		default:
+			if it.hash != "" {
+				fmt.Fprintf(&b, "%s %s %s\n", it.action, it.hash, it.msg)
+			} else {
+				fmt.Fprintf(&b, "%s\n", it.action)
+			}
+		}
 	}
-	return os.WriteFile(m.path, []byte(b.String()), 0644)
+	return b.String(), nil
 }
 
 func (m *rebaseModel) Init() tea.Cmd {
@@ -252,6 +360,9 @@ func (m *rebaseModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 			m.saved = true
 			return m, tea.Quit
+		case "ctrl+h", "f1":
+			m.helpVisible = !m.helpVisible
+			return m, nil
 		case "up", "k":
 			if m.cursor > 0 {
 				m.cursor--
@@ -271,10 +382,22 @@ func (m *rebaseModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.cursor++
 			}
 		case "tab", " ":
-			m.expanded = m.cursor
-			m.loadDiff(m.items[m.cursor].hash)
+			if m.cursor < len(m.items) && m.items[m.cursor].hash != "" {
+				m.expanded = m.cursor
+				m.loadDiff(m.items[m.cursor].hash)
+			}
 		case "esc":
+			if m.helpVisible {
+				m.helpVisible = false
+				return m, nil
+			}
+			if m.searchActive {
+				m.searchActive = false
+				m.searchQuery = ""
+				return m, nil
+			}
 			return m, tea.Quit
+		// Action keybindings
 		case "p":
 			if m.cursor < len(m.items) {
 				m.items[m.cursor].action = "pick"
@@ -299,6 +422,23 @@ func (m *rebaseModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			if m.cursor < len(m.items) {
 				m.items[m.cursor].action = "drop"
 			}
+		// Action cycling (space already used for expand, use 'c')
+		case "c":
+			if m.cursor < len(m.items) && m.items[m.cursor].hash != "" {
+				m.items[m.cursor].action = cycleAction(m.items[m.cursor].action)
+			}
+		// Squash all up — squash everything from cursor to the first pick above
+		case "S":
+			m.squashAllUp()
+		// Search
+		case "/":
+			m.searchActive = true
+			m.searchQuery = ""
+			return m, nil
+		case "n":
+			if m.searchQuery != "" {
+				m.searchNext()
+			}
 		}
 	}
 	return m, nil
@@ -319,8 +459,91 @@ func actionStyle(action string) lipgloss.Style {
 		return base.Foreground(lipgloss.Color("208"))
 	case "drop":
 		return base.Foreground(lipgloss.Color("196"))
+	case "exec":
+		return base.Foreground(lipgloss.Color("141")).Italic(true)
+	case "break":
+		return base.Foreground(lipgloss.Color("203"))
+	case "label":
+		return base.Foreground(lipgloss.Color("99"))
+	case "reset":
+		return base.Foreground(lipgloss.Color("203"))
+	case "merge":
+		return base.Foreground(lipgloss.Color("117"))
+	case "update-ref":
+		return base.Foreground(lipgloss.Color("245"))
 	default:
 		return base.Foreground(lipgloss.Color("245"))
+	}
+}
+
+// cycleAction cycles through pick → reword → edit → squash → fixup → drop → pick
+func cycleAction(action string) string {
+	switch action {
+	case "pick":
+		return "reword"
+	case "reword":
+		return "edit"
+	case "edit":
+		return "squash"
+	case "squash":
+		return "fixup"
+	case "fixup":
+		return "drop"
+	case "drop":
+		return "pick"
+	default:
+		return "pick"
+	}
+}
+
+// squashAllUp sets all items from the first pick down to the cursor
+// (exclusive of the first pick) to squash, collapsing all commits into
+// the topmost pick.
+func (m *rebaseModel) squashAllUp() {
+	if m.cursor < 0 || m.cursor >= len(m.items) {
+		return
+	}
+	// Find the first pick in the list
+	start := -1
+	for i := 0; i <= m.cursor; i++ {
+		if m.items[i].action == "pick" {
+			start = i
+			break
+		}
+	}
+	if start < 0 {
+		return
+	}
+	// Squash everything after the first pick up to and including cursor
+	for i := start + 1; i <= m.cursor && i < len(m.items); i++ {
+		if m.items[i].hash != "" {
+			m.items[i].action = "squash"
+		}
+	}
+}
+
+// searchNext moves cursor to the next item matching the search query.
+func (m *rebaseModel) searchNext() {
+	if m.searchQuery == "" {
+		return
+	}
+	query := strings.ToLower(m.searchQuery)
+	for i := m.cursor + 1; i < len(m.items); i++ {
+		if strings.Contains(strings.ToLower(m.items[i].msg), query) ||
+			strings.Contains(strings.ToLower(m.items[i].hash), query) ||
+			strings.Contains(strings.ToLower(m.items[i].author), query) {
+			m.cursor = i
+			return
+		}
+	}
+	// Wrap around
+	for i := 0; i <= m.cursor; i++ {
+		if strings.Contains(strings.ToLower(m.items[i].msg), query) ||
+			strings.Contains(strings.ToLower(m.items[i].hash), query) ||
+			strings.Contains(strings.ToLower(m.items[i].author), query) {
+			m.cursor = i
+			return
+		}
 	}
 }
 
@@ -329,6 +552,59 @@ func formatDate(t time.Time) string {
 		return ""
 	}
 	return t.Format("Jan 02 2006")
+}
+
+// wrapText word-wraps text to the given width, returning a slice of lines.
+// Uses simple space-based wrapping (no hyphenation).
+func wrapText(text string, width int) []string {
+	if width <= 0 {
+		return []string{text}
+	}
+	words := strings.Fields(text)
+	if len(words) == 0 {
+		return []string{""}
+	}
+	var lines []string
+	var current strings.Builder
+	currentLen := 0
+	for _, w := range words {
+		wLen := len(w)
+		if currentLen > 0 && currentLen+1+wLen > width {
+			lines = append(lines, current.String())
+			current.Reset()
+			current.WriteString(w)
+			currentLen = wLen
+		} else {
+			if currentLen > 0 {
+				current.WriteString(" ")
+				currentLen++
+			}
+			current.WriteString(w)
+			currentLen += wLen
+		}
+	}
+	if current.Len() > 0 {
+		lines = append(lines, current.String())
+	}
+	return lines
+}
+
+// renderFooterBar renders a one-line or multi-line footer bar that is
+// always pinned to the bottom of the screen. When expanded is true,
+// the full help text is shown with word wrapping; otherwise a compact
+// single line is shown.
+func renderFooterBar(compactText, expandedText string, width int, expanded bool) string {
+	style := lipgloss.NewStyle().
+		Foreground(lipgloss.Color("241")).
+		Background(lipgloss.Color("236")).
+		Padding(0, 1).
+		Width(width)
+
+	if expanded {
+		wrapped := wrapText(expandedText, width-2)
+		return style.Render(strings.Join(wrapped, "\n"))
+	}
+	return style.Render(compactText)
 }
 
 func (m *rebaseModel) View() tea.View {
@@ -345,19 +621,30 @@ func (m *rebaseModel) View() tea.View {
 		Bold(true).
 		Foreground(lipgloss.Color("99")).
 		Padding(0, 1).
-		Render("loom — interactive rebase")
+		Render(fmt.Sprintf("loom — interactive rebase  (%d commits)", len(m.items)))
 
 	var rows []string
 	for i, it := range m.items {
 		selected := i == m.cursor
 		action := actionStyle(it.action).Render(it.action)
-		hash := lipgloss.NewStyle().Foreground(lipgloss.Color("243")).Render(it.hash)
+
+		hashStr := ""
+		if it.hash != "" {
+			hashStr = lipgloss.NewStyle().Foreground(lipgloss.Color("243")).Render(it.hash)
+		}
 
 		var msg string
+		displayMsg := it.msg
+		if it.hash == "" && it.action == "break" {
+			displayMsg = "(stop here)"
+		}
+		if displayMsg == "" && it.action == "break" {
+			displayMsg = "(stop here)"
+		}
 		if m.expanded == i {
-			msg = lipgloss.NewStyle().Bold(true).Render(it.msg)
+			msg = lipgloss.NewStyle().Bold(true).Render(displayMsg)
 		} else {
-			msg = lipgloss.NewStyle().Render(it.msg)
+			msg = lipgloss.NewStyle().Render(displayMsg)
 		}
 
 		authorStr := ""
@@ -390,11 +677,11 @@ func (m *rebaseModel) View() tea.View {
 			meta = "  " + strings.Join(metaParts, "  ")
 		}
 
-		row = fmt.Sprintf("%s%s %s %s %s%s", gutter, marker, action, hash, msg, meta)
+		row = fmt.Sprintf("%s%s %s %s %s%s", gutter, marker, action, hashStr, msg, meta)
 
 		if selected {
 			gutter = "▶ "
-			row = fmt.Sprintf("%s%s %s %s %s%s", gutter, marker, action, hash, msg, meta)
+			row = fmt.Sprintf("%s%s %s %s %s%s", gutter, marker, action, hashStr, msg, meta)
 			row = lipgloss.NewStyle().
 				Bold(true).
 				Background(lipgloss.Color("236")).
@@ -410,21 +697,58 @@ func (m *rebaseModel) View() tea.View {
 
 	list := strings.Join(rows, "\n")
 
-	helpText := "↑/k ↓/j move  •  shift+↑/K shift+↓/J reorder  •  p pick  r reword  e edit  s squash  f fixup  d drop  •  tab/space expand diff  •  enter save  q/esc cancel"
+	commitCount := len(m.items)
+	compactHelp := fmt.Sprintf("↑/k ↓/j move  p/r/e/s/f/d action  c cycle  S squash-all  tab diff  / search  ctrl+h help  enter save  q quit  •  %d commits", commitCount)
 	if m.expanded >= 0 {
-		helpText = "↑/k ↓/j scroll  •  pgup/pgdn page  •  g/G top/bottom  •  tab/space collapse  •  esc back  •  enter save"
+		compactHelp = "↑/k ↓/j scroll  pgup/pgdn page  g/G top/bottom  tab/space collapse  esc back  enter save  ctrl+h help"
+	}
+	if m.searchActive {
+		compactHelp = "search: " + m.searchQuery + "  •  esc cancel  •  n next match  •  ctrl+h help"
 	}
 
-	help := lipgloss.NewStyle().
-		Foreground(lipgloss.Color("241")).
-		Padding(1, 1).
-		Render(helpText)
+	footer := renderFooterBar(compactHelp, "", m.width, false)
 
-	content := lipgloss.JoinVertical(lipgloss.Left, title, "", list, "", help)
+	// Pin footer at bottom: compute content height, pad, then append footer
+	titleSection := lipgloss.JoinVertical(lipgloss.Left, title, "", list)
+	contentHeight := strings.Count(titleSection, "\n") + 1
+	footerHeight := strings.Count(footer, "\n") + 1
+	padLines := m.height - contentHeight - footerHeight
+	if padLines < 0 {
+		padLines = 0
+	}
+
+	allSections := append([]string{titleSection}, make([]string, padLines)...)
+	allSections = append(allSections, footer)
+	content := lipgloss.JoinVertical(lipgloss.Left, allSections...)
+
+	// Render help as a centered floating overlay
+	if m.helpVisible {
+		content = overlay.Center(content, m.renderHelpOverlay(), m.width, m.height)
+	}
 
 	v := tea.NewView(content)
 	v.AltScreen = true
 	return v
+}
+
+func (m *rebaseModel) renderHelpOverlay() string {
+	helpText := `loom rebase — keybindings
+
+  ↑/k ↓/j      move cursor          p/r/e/s/f/d  set action
+  shift+↑/K    reorder up           c            cycle action
+  shift+↓/J    reorder down         S            squash-all-up
+  tab/space    expand/collapse diff /            search
+  n            next search match    esc          cancel search
+  enter        save & quit          q/ctrl+c     quit without saving
+  ctrl+h/f1    toggle this help`
+	help := lipgloss.NewStyle().
+		Border(lipgloss.RoundedBorder()).
+		BorderForeground(lipgloss.Color("99")).
+		Background(lipgloss.Color("234")).
+		Padding(1, 2).
+		Width(60).
+		Render(helpText)
+	return help
 }
 
 func (m *rebaseModel) renderExpandedDiff() string {

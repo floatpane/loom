@@ -53,6 +53,30 @@ var commonCommitWords = []string{
 	"ensure", "validate", "check", "return", "parse",
 	"render", "display", "show", "hide", "toggle",
 	"enable", "disable", "reset", "clear", "init",
+	"migrate", "deprecate", "restore", "revert", "replace",
+	"extract", "inline", "merge", "split", "separate",
+	"combine", "rename", "wrap", "unwrap", "guard",
+	"document", "configure", "install", "build", "release",
+	"test", "mock", "stub", "skip", "flaky",
+	"cache", "buffer", "queue", "flush", "drain",
+	"load", "store", "fetch", "push", "pull",
+	"connect", "disconnect", "bind", "unbind", "listen",
+	"resolve", "reject", "retry", "timeout", "cancel",
+	"abort", "commit", "rollback", "rebase", "cherry-pick",
+	"upgrade", "downgrade", "bump", "pin", "unpin",
+	"format", "lint", "typecheck", "coverage", "benchmark",
+	"parallel", "concurrent", "async", "sync", "atomic",
+	"panic", "error", "warn", "log", "trace",
+	"memory", "cpu", "disk", "network", "latency",
+	"crash", "leak", "deadlock", "race", "overflow",
+	"sanitize", "escape", "unescape", "encode", "decode",
+	"encrypt", "decrypt", "hash", "verify", "authenticate",
+	"authorize", "login", "logout", "session", "token",
+	"schema", "migration", "column", "index", "constraint",
+	"route", "endpoint", "handler", "middleware", "request",
+	"response", "header", "cookie", "status", "redirect",
+	"component", "props", "state", "hook", "effect",
+	"context", "provider", "consumer", "selector", "reducer",
 }
 
 // trailerDef describes a commit trailer that loom knows about.
@@ -76,9 +100,37 @@ var knownTrailers = []trailerDef{
 	{"Tested-by", true},
 	{"Reported-by", true},
 	{"Suggested-by", true},
+	{"Requested-by", true},
+	{"Helped-by", true},
+	{"Mentored-by", true},
+	{"Written-by", true},
+	{"Documented-by", true},
+	{"Based-on-patch-by", true},
+	{"Original-author", true},
+	{"Co-developed-by", true},
 	{"Fixes", false},
 	{"Closes", false},
+	{"Resolves", false},
 	{"Refs", false},
+	{"Reverts", false},
+	{"Part-of", false},
+	{"Link", false},
+	{"Bug", false},
+	{"Issue", false},
+	{"PR", false},
+	{"See-also", false},
+	{"Supersedes", false},
+	{"Cc", false},
+	{"Signed-off", false},
+	{"Change-id", false},
+	{"Reviewed-on", false},
+	{"Tested-on", false},
+	{"Release", false},
+	{"Stability", false},
+	{"Honor", false},
+	{"Thanks-to", true},
+	{"Notification", false},
+	{"Commit-message", false},
 }
 
 // personValueTrailers returns the set of trailer canonical names that
@@ -91,6 +143,63 @@ func personValueTrailers() map[string]bool {
 		}
 	}
 	return m
+}
+
+// isKnownCommitType reports whether the given string is a recognized
+// conventional commit type (feat, fix, etc.).
+func isKnownCommitType(t string) bool {
+	for _, ct := range conventionalCommitTypes {
+		if ct.prefix == t {
+			return true
+		}
+	}
+	return false
+}
+
+// extractConventionalType returns the type part of a conventional commit
+// subject (e.g. "feat" from "feat(api): add thing"), or "" if not conventional.
+func extractConventionalType(subject string) string {
+	idx := strings.Index(subject, ":")
+	if idx <= 0 {
+		return ""
+	}
+	typePart := subject[:idx]
+	parenIdx := strings.Index(typePart, "(")
+	if parenIdx >= 0 {
+		return typePart[:parenIdx]
+	}
+	// Strip trailing "!" (breaking change marker)
+	typePart = strings.TrimSuffix(typePart, "!")
+	return typePart
+}
+
+// visibleWidth counts visible characters in a string, ignoring ANSI escape
+// sequences. Used for displaying subject length in the status bar.
+func visibleWidth(s string) int {
+	count := 0
+	i := 0
+	for i < len(s) {
+		if s[i] == '\x1b' {
+			j := i + 1
+			if j < len(s) && s[j] == '[' {
+				j++
+				for j < len(s) {
+					if s[j] >= 0x40 && s[j] <= 0x7e {
+						j++
+						break
+					}
+					j++
+				}
+			} else if j < len(s) {
+				j++
+			}
+			i = j
+			continue
+		}
+		count++
+		i++
+	}
+	return count
 }
 
 // trailerCanonicalNames returns all known trailer canonical names.
@@ -306,7 +415,36 @@ type coAuthor struct {
 type suggestion struct {
 	text    string // full text to insert
 	display string // text shown in the popup
-	kind    string // "type", "word", "trailer", "person"
+	kind    string // "type", "word", "trailer", "person", "scope", "gitmoji", "issue"
+	score   int    // ranking score (higher = more relevant)
+}
+
+// suggestionCtx provides git context to the suggestion engine, enabling
+// branch-based type/scope suggestions, recent-commit-words, etc.
+type suggestionCtx struct {
+	branch       string
+	branchType   string // conventional type derived from branch name
+	branchScope  string // scope derived from branch name
+	branchIssue  string // issue number from branch name
+	scopes       []string // scopes seen in recent history
+	recentWords  []string // words from recent commits
+	typeFreqs    map[string]int // conventional type frequency in history
+	gitmojiWords []string
+}
+
+var globalSugCtx *suggestionCtx
+
+// loadSuggestionCtx populates global suggestion context from git.
+func loadSuggestionCtx() *suggestionCtx {
+	ctx := &suggestionCtx{}
+	branch := currentBranchName()
+	ctx.branch = branch
+	ctx.branchType, ctx.branchScope, ctx.branchIssue = branchNameToSuggestions(branch)
+	ctx.scopes = loadScopesFromHistory()
+	ctx.recentWords = loadRecentCommitWords(150)
+	ctx.typeFreqs = loadCommitTypeFrequencies()
+	globalSugCtx = ctx
+	return ctx
 }
 
 // computeSuggestions returns suggestions based on the current word being typed
@@ -317,6 +455,44 @@ func computeSuggestions(lines []string, row, col int, ps *peopleStore) []suggest
 	}
 	line := lines[row]
 	lineLower := strings.ToLower(line)
+
+	// Clamp col to line length
+	lineRunes := []rune(line)
+	if col > len(lineRunes) {
+		col = len(lineRunes)
+	}
+
+	// --- Gitmoji suggestions: triggered by ":" at start of line 0 ---
+	if row == 0 && col > 0 && line[0] == ':' {
+		// Check that everything before col is part of the gitmoji query
+		query := strings.ToLower(line[1:col])
+		isValid := true
+		for _, c := range query {
+			if !((c >= 'a' && c <= 'z') || (c >= '0' && c <= '9') || c == '-' || c == '_') {
+				isValid = false
+				break
+			}
+		}
+		if isValid {
+			return gitmojiSuggestions(query)
+		}
+	}
+
+	// --- Breaking change marker: "type!" or "type(scope)!" ---
+	if row == 0 && col > 0 && col <= len(line) && line[col-1] == '!' {
+		// Check if what's before ! is a valid conventional type
+		before := line[:col-1]
+		if isKnownCommitType(before) || (strings.Contains(before, "(") && isKnownCommitType(before[:strings.Index(before, "(")])) {
+			return []suggestion{
+				{
+					text:    "!: ",
+					display: "! — breaking change",
+					kind:    "type",
+					score:   50,
+				},
+			}
+		}
+	}
 
 	// Find the start of the current word
 	wordStart := col
@@ -329,24 +505,82 @@ func computeSuggestions(lines []string, row, col int, ps *peopleStore) []suggest
 	}
 	lower := strings.ToLower(currentWord)
 
-	// Check if we're on the first line and at the start — suggest commit types
+	ctx := globalSugCtx
+	if ctx == nil {
+		ctx = &suggestionCtx{}
+	}
+
+	// --- Gitmoji suggestions: triggered by ":" at start of line 0 ---
+	if row == 0 && wordStart == 0 && strings.HasPrefix(currentWord, ":") {
+		query := strings.ToLower(currentWord[1:])
+		return gitmojiSuggestions(query)
+	}
+
+	// --- Conventional commit type suggestions (line 0, start of line) ---
 	if row == 0 && wordStart == 0 {
 		var suggestions []suggestion
 		for _, ct := range conventionalCommitTypes {
 			if strings.HasPrefix(ct.prefix, lower) && ct.prefix != lower {
+				score := 10
+				if ctx.typeFreqs != nil {
+					score += ctx.typeFreqs[ct.prefix]
+				}
+				if ctx.branchType == ct.prefix {
+					score += 100
+				}
 				suggestions = append(suggestions, suggestion{
 					text:    ct.prefix + ": ",
 					display: ct.prefix + " — " + ct.desc,
 					kind:    "type",
+					score:   score,
 				})
 			}
 		}
+		// Also suggest exact-match type with scope from branch
+		if ctx.branchType != "" && ctx.branchType == lower && ctx.branchScope != "" {
+			suggestions = append(suggestions, suggestion{
+				text:    ctx.branchType + "(" + ctx.branchScope + "): ",
+				display: ctx.branchType + "(" + ctx.branchScope + ") — from branch",
+				kind:    "type",
+				score:   200,
+			})
+		}
 		if len(suggestions) > 0 {
-			return suggestions
+			return rankAndLimit(suggestions, 8)
 		}
 	}
 
-	// Check if we're typing a trailer value (e.g. "Co-authored-by: Al")
+	// --- Scope suggestions: "type(" → suggest scopes from history ---
+	if row == 0 {
+		// Check if we're inside a scope: "type(sco"
+		parenOpen := strings.Index(line, "(")
+		if parenOpen >= 0 && parenOpen < col {
+			// Check there's no closing paren yet
+			closeParen := strings.Index(line[parenOpen:], ")")
+			if closeParen < 0 || parenOpen+closeParen >= col {
+				afterParen := line[parenOpen+1 : col]
+				// Only suggest if the type part is a known commit type
+				typePart := line[:parenOpen]
+				if isKnownCommitType(typePart) {
+					return scopeSuggestions(afterParen, ctx)
+				}
+			}
+		}
+	}
+
+	// --- Breaking change marker: "type!" or "type(scope)!" ---
+	if row == 0 && wordStart == 0 && currentWord == "!" {
+		return []suggestion{
+			{
+				text:    "!: ",
+				display: "! — breaking change",
+				kind:    "type",
+				score:   50,
+			},
+		}
+	}
+
+	// --- Trailer value suggestions (e.g. "Co-authored-by: Al") ---
 	for _, t := range knownTrailers {
 		prefix := strings.ToLower(t.canonical) + ":"
 		if strings.HasPrefix(lineLower, prefix) {
@@ -358,12 +592,15 @@ func computeSuggestions(lines []string, row, col int, ps *peopleStore) []suggest
 				}
 				return personSuggestions(ps, afterColon)
 			}
-			// Non-person trailer: no suggestions for now
+			// Non-person trailer: suggest issue numbers for Fixes/Closes/Resolves/Refs
+			if t.canonical == "Fixes" || t.canonical == "Closes" || t.canonical == "Resolves" || t.canonical == "Refs" || t.canonical == "Issue" || t.canonical == "Bug" || t.canonical == "PR" {
+				return issueRefSuggestions(afterColon, ctx)
+			}
 			return nil
 		}
 	}
 
-	// Check if we're at the start of a non-first line — suggest trailer names
+	// --- Trailer name suggestions (start of non-first line) ---
 	if row > 0 && wordStart == 0 && col > 0 {
 		var suggestions []suggestion
 		for _, t := range knownTrailers {
@@ -373,6 +610,21 @@ func computeSuggestions(lines []string, row, col int, ps *peopleStore) []suggest
 					text:    t.canonical + ": ",
 					display: t.canonical,
 					kind:    "trailer",
+					score:   10,
+				})
+			}
+		}
+		if len(suggestions) > 0 {
+			return rankAndLimit(suggestions, 8)
+		}
+		// Exact match — suggest with value hint
+		for _, t := range knownTrailers {
+			if strings.ToLower(t.canonical) == lower {
+				suggestions = append(suggestions, suggestion{
+					text:    t.canonical + ": ",
+					display: t.canonical,
+					kind:    "trailer",
+					score:   5,
 				})
 			}
 		}
@@ -381,14 +633,37 @@ func computeSuggestions(lines []string, row, col int, ps *peopleStore) []suggest
 		}
 	}
 
-	// Generic word suggestions from common commit words
+	// --- Generic word suggestions: combine common words + recent commit words ---
 	var suggestions []suggestion
+	seen := make(map[string]bool)
 	for _, w := range commonCommitWords {
-		if strings.HasPrefix(w, lower) && w != lower {
+		if (strings.HasPrefix(w, lower) || fuzzyMatch(lower, w)) && w != lower && !seen[w] {
+			seen[w] = true
+			score := 10
+			if strings.HasPrefix(w, lower) {
+				score += 20
+			}
 			suggestions = append(suggestions, suggestion{
 				text:    w,
 				display: w,
 				kind:    "word",
+				score:   score,
+			})
+		}
+	}
+	// Add recent words from git history
+	for _, w := range ctx.recentWords {
+		if (strings.HasPrefix(w, lower) || fuzzyMatch(lower, w)) && w != lower && !seen[w] {
+			seen[w] = true
+			score := 5
+			if strings.HasPrefix(w, lower) {
+				score += 15
+			}
+			suggestions = append(suggestions, suggestion{
+				text:    w,
+				display: w + " ~",
+				kind:    "word",
+				score:   score,
 			})
 		}
 	}
@@ -396,10 +671,118 @@ func computeSuggestions(lines []string, row, col int, ps *peopleStore) []suggest
 	if len(suggestions) == 0 {
 		return nil
 	}
-	if len(suggestions) > 8 {
-		suggestions = suggestions[:8]
+	return rankAndLimit(suggestions, 8)
+}
+
+// rankAndLimit sorts suggestions by score (descending) and truncates.
+func rankAndLimit(suggestions []suggestion, limit int) []suggestion {
+	// Simple insertion sort by score descending
+	for i := 1; i < len(suggestions); i++ {
+		for j := i; j > 0 && suggestions[j].score > suggestions[j-1].score; j-- {
+			suggestions[j], suggestions[j-1] = suggestions[j-1], suggestions[j]
+		}
+	}
+	if len(suggestions) > limit {
+		suggestions = suggestions[:limit]
 	}
 	return suggestions
+}
+
+// fuzzyMatch checks if all characters of `query` appear in order in `target`.
+func fuzzyMatch(query, target string) bool {
+	if len(query) < 3 {
+		return false
+	}
+	qi := 0
+	for ti := 0; ti < len(target) && qi < len(query); ti++ {
+		if query[qi] == target[ti] {
+			qi++
+		}
+	}
+	return qi == len(query)
+}
+
+// gitmojiSuggestions returns emoji suggestions for a ":" prefix query.
+func gitmojiSuggestions(query string) []suggestion {
+	var suggestions []suggestion
+	for _, g := range gitmojiList {
+		if query == "" || strings.Contains(g.code, query) {
+			suggestions = append(suggestions, suggestion{
+				text:    g.emoji + " ",
+				display: g.emoji + " :" + g.code + " — " + g.desc,
+				kind:    "gitmoji",
+				score:   10,
+			})
+		}
+	}
+	if len(suggestions) == 0 {
+		return nil
+	}
+	return rankAndLimit(suggestions, 8)
+}
+
+// scopeSuggestions returns scope suggestions from history matching the prefix.
+func scopeSuggestions(prefix string, ctx *suggestionCtx) []suggestion {
+	if ctx == nil || len(ctx.scopes) == 0 {
+		return nil
+	}
+	lower := strings.ToLower(prefix)
+	var suggestions []suggestion
+	// Branch-derived scope always gets highest priority
+	if ctx.branchScope != "" && strings.HasPrefix(strings.ToLower(ctx.branchScope), lower) {
+		suggestions = append(suggestions, suggestion{
+			text:    ctx.branchScope + "): ",
+			display: ctx.branchScope + " — from branch",
+			kind:    "scope",
+			score:   200,
+		})
+	}
+	for _, s := range ctx.scopes {
+		if strings.HasPrefix(strings.ToLower(s), lower) && s != ctx.branchScope {
+			suggestions = append(suggestions, suggestion{
+				text:    s + "): ",
+				display: s,
+				kind:    "scope",
+				score:   50,
+			})
+		}
+	}
+	if len(suggestions) == 0 {
+		return nil
+	}
+	return rankAndLimit(suggestions, 8)
+}
+
+// issueRefSuggestions suggests issue/PR references.
+func issueRefSuggestions(prefix string, ctx *suggestionCtx) []suggestion {
+	var suggestions []suggestion
+
+	// Suggest "#" prefix if empty
+	if prefix == "" {
+		suggestions = append(suggestions, suggestion{
+			text:    "#",
+			display: "# — issue number",
+			kind:    "issue",
+			score:   10,
+		})
+	}
+
+	// Suggest branch-derived issue number
+	if ctx != nil && ctx.branchIssue != "" {
+		if strings.HasPrefix(ctx.branchIssue, strings.TrimPrefix(prefix, "#")) {
+			suggestions = append(suggestions, suggestion{
+				text:    "#" + ctx.branchIssue,
+				display: "#" + ctx.branchIssue + " — from branch",
+				kind:    "issue",
+				score:   100,
+			})
+		}
+	}
+
+	if len(suggestions) == 0 {
+		return nil
+	}
+	return rankAndLimit(suggestions, 8)
 }
 
 // personSuggestions builds suggestion entries from the people store

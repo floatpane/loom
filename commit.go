@@ -4,12 +4,14 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"strings"
 	"time"
 
 	"charm.land/bubbles/v2/viewport"
 	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
+	"github.com/floatpane/bubble-overlay"
 )
 
 type commitModel struct {
@@ -30,23 +32,54 @@ type commitModel struct {
 	err         error
 	diffFocus   bool
 	fullscreen  bool
+
+	// new fields
+	branch       string
+	stagedFiles  []stagedFile
+	diffStat     string
+	helpVisible  bool
+	exitConfirm  bool
+	dirty        bool // unsaved changes
+	mode         string // "commit", "merge", "tag"
+	cfg          *loomConfig
 }
 
 func newCommitModel(path string) *commitModel {
 	ed := newEditor()
 	ed.commitMode = true
-	m := &commitModel{path: path, editor: ed}
+	m := &commitModel{path: path, editor: ed, mode: "commit"}
 	m.diffVP = viewport.New()
 	m.diffVP.SoftWrap = false
 
 	m.loadCommitMeta()
 	m.people = newPeopleStore()
 	ed.people = m.people
+	m.cfg = loadLoomConfig()
+
+	// Load git context for suggestions
+	loadSuggestionCtx()
+	m.branch = currentBranchName()
+	m.stagedFiles = loadStagedFiles()
+	m.diffStat = loadDiffStat()
+
+	// Detect mode from path
+	m.mode = detectEditorMode(path)
 
 	if data, err := os.ReadFile(path); err == nil {
 		m.parseCommitFile(string(data))
 	} else {
-		ed.lines = []string{""}
+		// Try loading commit template
+		tmpl := loadCommitTemplate()
+		if tmpl != "" {
+			m.parseCommitFile(tmpl)
+		} else {
+			ed.lines = []string{""}
+		}
+	}
+
+	// If config has signoff, add Signed-off-by trailer template
+	if m.cfg.Signoff && m.author != "" {
+		m.ensureSignoff()
 	}
 
 	return m
@@ -58,6 +91,92 @@ func (m *commitModel) loadCommitMeta() {
 		m.author = strings.TrimSpace(string(out))
 	}
 	m.date = time.Now()
+}
+
+// detectEditorMode determines what kind of git message file this is.
+func detectEditorMode(path string) string {
+	_ = filepath.Base(path)
+	switch {
+	case strings.Contains(path, "MERGE_MSG"):
+		return "merge"
+	case strings.Contains(path, "TAG_EDITMSG") || strings.Contains(path, "tag"):
+		return "tag"
+	case strings.Contains(path, "COMMIT_EDITMSG"):
+		return "commit"
+	case strings.Contains(path, "git-rebase-todo"):
+		return "rebase"
+	default:
+		return "commit"
+	}
+}
+
+// ensureSignoff adds a Signed-off-by trailer if not already present.
+func (m *commitModel) ensureSignoff() {
+	email, _ := exec.Command("git", "config", "user.email").Output()
+	emailStr := strings.TrimSpace(string(email))
+	if m.author == "" || emailStr == "" {
+		return
+	}
+	signoff := "Signed-off-by: " + m.author + " <" + emailStr + ">"
+	for _, line := range m.editor.lines {
+		if strings.TrimSpace(line) == signoff {
+			return
+		}
+	}
+	// Ensure blank line before trailers
+	if len(m.editor.lines) > 0 && m.editor.lines[len(m.editor.lines)-1] != "" {
+		m.editor.lines = append(m.editor.lines, "")
+	}
+	m.editor.lines = append(m.editor.lines, signoff)
+	m.editor.syncToViewport()
+}
+
+// addCoAuthor adds a Co-authored-by trailer for the current git user.
+func (m *commitModel) addCoAuthor() {
+	email, _ := exec.Command("git", "config", "user.email").Output()
+	emailStr := strings.TrimSpace(string(email))
+	if m.author == "" || emailStr == "" {
+		return
+	}
+	coAuthor := "Co-authored-by: " + m.author + " <" + emailStr + ">"
+	for _, line := range m.editor.lines {
+		if strings.TrimSpace(line) == coAuthor {
+			return
+		}
+	}
+	// Ensure blank line before trailers
+	if len(m.editor.lines) > 0 && m.editor.lines[len(m.editor.lines)-1] != "" {
+		m.editor.lines = append(m.editor.lines, "")
+	}
+	m.editor.lines = append(m.editor.lines, coAuthor)
+	m.editor.syncToViewport()
+	m.dirty = true
+}
+
+// autosaveDraft saves the current message to ~/.loom/draft.txt.
+func (m *commitModel) autosaveDraft() {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return
+	}
+	draftPath := filepath.Join(home, ".loom", "draft.txt")
+	content := m.editor.value()
+	_ = os.MkdirAll(filepath.Dir(draftPath), 0755)
+	_ = os.WriteFile(draftPath, []byte(content), 0644)
+}
+
+// loadDraft loads a previously saved draft if one exists.
+func loadDraft() string {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return ""
+	}
+	draftPath := filepath.Join(home, ".loom", "draft.txt")
+	data, err := os.ReadFile(draftPath)
+	if err != nil {
+		return ""
+	}
+	return string(data)
 }
 
 func (m *commitModel) parseCommitFile(content string) {
@@ -208,6 +327,10 @@ func (m *commitModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		case "ctrl+s":
 			return m, m.save()
 		case "ctrl+c":
+			if m.dirty && !m.exitConfirm {
+				m.exitConfirm = true
+				return m, nil
+			}
 			return m, tea.Quit
 		case "esc":
 			if len(m.editor.suggestions) > 0 {
@@ -215,10 +338,28 @@ func (m *commitModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.editor.selSug = -1
 				return m, nil
 			}
+			if m.helpVisible {
+				m.helpVisible = false
+				return m, nil
+			}
+			if m.exitConfirm {
+				m.exitConfirm = false
+				return m, nil
+			}
+			if m.dirty {
+				m.exitConfirm = true
+				return m, nil
+			}
 			return m, tea.Quit
 		case "ctrl+f":
 			m.fullscreen = !m.fullscreen
 			m.layout()
+			return m, nil
+		case "ctrl+h", "f1":
+			m.helpVisible = !m.helpVisible
+			return m, nil
+		case "ctrl+o":
+			m.addCoAuthor()
 			return m, nil
 		case "tab":
 			if len(m.editor.suggestions) > 0 && m.editor.selSug >= 0 {
@@ -237,6 +378,8 @@ func (m *commitModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 		m.editor.handleKey(msg)
 		m.editor.ensureVisible()
+		m.dirty = true
+		m.autosaveDraft()
 		return m, nil
 	}
 	return m, nil
@@ -264,6 +407,15 @@ func (m *commitModel) save() tea.Cmd {
 		return nil
 	}
 	m.saved = true
+	m.dirty = false
+	m.exitConfirm = false
+
+	// Clear draft
+	home, err := os.UserHomeDir()
+	if err == nil {
+		_ = os.Remove(filepath.Join(home, ".loom", "draft.txt"))
+	}
+
 	return tea.Quit
 }
 
@@ -284,20 +436,21 @@ func (m *commitModel) layout() {
 	}
 
 	if m.diffReady {
-		diffHeight := min(bodyHeight/2, 20)
-		if diffHeight < 5 {
-			diffHeight = 5
-		}
+		// Give the diff the lion's share of the screen — editor stays small
 		infoHeight := 0
 		if len(m.infoLines) > 0 {
 			infoHeight = len(m.infoLines) + 2
-			if infoHeight > 10 {
-				infoHeight = 10
+			if infoHeight > 8 {
+				infoHeight = 8
 			}
 		}
-		editorHeight := bodyHeight - diffHeight - infoHeight - 3
-		if editorHeight < 3 {
-			editorHeight = 3
+		editorHeight := 6
+		if editorHeight < 4 {
+			editorHeight = 4
+		}
+		diffHeight := bodyHeight - editorHeight - infoHeight - 3
+		if diffHeight < 8 {
+			diffHeight = 8
 		}
 		m.editor.setWidth(m.width)
 		m.editor.setHeight(editorHeight)
@@ -322,17 +475,34 @@ func (m *commitModel) layout() {
 }
 
 func (m *commitModel) View() tea.View {
+	modeLabel := "commit message"
+	switch m.mode {
+	case "merge":
+		modeLabel = "merge message"
+	case "tag":
+		modeLabel = "tag annotation"
+	}
+
+	headerText := fmt.Sprintf(" loom — %s   %s", modeLabel, m.path)
+	if m.branch != "" && m.branch != "HEAD" {
+		headerText += fmt.Sprintf("   ⎇ %s", m.branch)
+	}
+
 	header := lipgloss.NewStyle().
 		Bold(true).
 		Foreground(lipgloss.Color("99")).
 		Background(lipgloss.Color("236")).
 		Padding(0, 1).
 		Width(m.width).
-		Render(fmt.Sprintf(" loom — commit message   %s", m.path))
+		Render(headerText)
 
 	value := m.editor.value()
 	lineCount := len(m.editor.lines)
 	wordCount := len(strings.Fields(value))
+	subjectLen := 0
+	if lineCount > 0 {
+		subjectLen = visibleWidth(m.editor.lines[0])
+	}
 
 	focusLabel := "message"
 	if m.diffFocus {
@@ -345,21 +515,25 @@ func (m *commitModel) View() tea.View {
 	}
 
 	var statusText string
+
 	if m.fullscreen {
-		statusText = fmt.Sprintf("ctrl+s save  •  esc cancel  •  ctrl+f %s", fsLabel)
+		statusText = fmt.Sprintf("ctrl+s save  •  esc cancel  •  ctrl+f %s  •  ctrl+h help", fsLabel)
 		if m.diffReady {
 			statusText += fmt.Sprintf("  •  tab: focus %s", focusLabel)
 		}
 	} else {
-		statusText = fmt.Sprintf("ctrl+s save  •  esc cancel  •  ctrl+f %s  •  %d lines  %d words", fsLabel, lineCount, wordCount)
+		statusText = fmt.Sprintf("ctrl+s save  •  esc cancel  •  ctrl+f %s  •  ctrl+h help  •  ctrl+o co-author  •  %dL %dW subj:%d", fsLabel, lineCount, wordCount, subjectLen)
 		if m.diffReady {
-			statusText = fmt.Sprintf("ctrl+s save  •  esc cancel  •  ctrl+f %s  •  %d lines  %d words  •  tab: focus %s", fsLabel, lineCount, wordCount, focusLabel)
+			statusText = fmt.Sprintf("ctrl+s save  •  esc cancel  •  ctrl+f %s  •  ctrl+h help  •  %dL %dW subj:%d  •  tab: focus %s", fsLabel, lineCount, wordCount, subjectLen, focusLabel)
 		}
 	}
+
 	if m.saved {
 		statusText = "saved!"
 	} else if m.err != nil {
 		statusText = fmt.Sprintf("error: %v", m.err)
+	} else if m.exitConfirm {
+		statusText = "unsaved changes — press esc/ctrl+c again to discard, ctrl+s to save"
 	}
 
 	footer := lipgloss.NewStyle().
@@ -419,9 +593,43 @@ func (m *commitModel) View() tea.View {
 	allSections = append(allSections, footer)
 	content := lipgloss.JoinVertical(lipgloss.Left, allSections...)
 
+	// Render help as a centered floating overlay
+	if m.helpVisible {
+		content = overlay.Center(content, m.renderHelpOverlay(), m.width, m.height)
+	}
+
 	v := tea.NewView(content)
 	v.AltScreen = true
 	return v
+}
+
+func (m *commitModel) renderHelpOverlay() string {
+	helpText := `loom — keybindings
+
+  ctrl+s     save & quit          ctrl+z     undo
+  esc        cancel / close       ctrl+y     redo
+  ctrl+c     force quit           ctrl+t     transpose chars
+  ctrl+f     toggle fullscreen    ctrl+d     duplicate line
+  ctrl+h/f1  toggle this help     alt+↑/↓    move line up/down
+  ctrl+o     add co-author        ctrl+w     delete word
+  tab        accept / focus diff  ctrl+n     search next
+  ↑↓←→       cursor               ctrl+g     goto line
+  ctrl+←/→   jump by word         ctrl+l     clear all
+
+  Autocomplete: type → then tab to accept
+  Conventional: type prefix (feat, fix, …) → tab
+  Scopes: type "feat(" → scope suggestions
+  Gitmoji: type ":sparkles" → emoji insert
+  Trailers: on body lines, type prefix → tab
+  Co-authors: "Co-authored-by: " → name suggestions`
+	help := lipgloss.NewStyle().
+		Border(lipgloss.RoundedBorder()).
+		BorderForeground(lipgloss.Color("99")).
+		Background(lipgloss.Color("234")).
+		Padding(1, 2).
+		Width(60).
+		Render(helpText)
+	return help
 }
 
 func (m *commitModel) renderInfoPanel() string {

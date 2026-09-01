@@ -33,9 +33,15 @@ type diffHunk struct {
 }
 
 type diffFileChange struct {
-	oldPath string
-	newPath string
-	hunks   []diffHunk
+	oldPath  string
+	newPath  string
+	hunks    []diffHunk
+	isNew    bool
+	isDeleted bool
+	isBinary bool
+	isRenamed bool
+	oldMode  string
+	newMode  string
 }
 
 // --- Diff styles (hex colors, dark theme) ---
@@ -190,7 +196,7 @@ func languageRules(lang string) []hlRule {
 			funcRule(),
 			mustRule(`[{}()\[\];,:.<>=+\-*/%&|^!~?]`, tokPunctuation),
 		}
-	case "java", "kotlin", "kt", "scala", "groovy":
+	case "java":
 		return []hlRule{
 			mustRule(`\/\/[^\n]*|\/\*[\s\S]*?\*\/`, tokComment),
 			mustRule(`"(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*'`, tokString),
@@ -278,6 +284,282 @@ func languageRules(lang string) []hlRule {
 			mustRule(`\[[^\]]*\]\([^)]*\)`, tokFunction),
 			mustRule(`^[>\-\*\+]\s`, tokPunctuation),
 		}
+	case "php":
+		return []hlRule{
+			mustRule(`\/\/[^\n]*|\/\*[\s\S]*?\*\/|#\[.*?\]`, tokComment),
+			mustRule(`"(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*'`, tokString),
+			mustRule(`\b(abstract|and|array|as|break|callable|case|catch|class|clone|const|continue|declare|default|die|do|echo|else|elseif|empty|enddeclare|endfor|endforeach|endif|endswitch|endwhile|eval|exit|extends|final|finally|fn|for|foreach|function|global|goto|if|implements|include|include_once|instanceof|insteadof|interface|isset|list|match|namespace|new|or|print|private|protected|public|readonly|require|require_once|return|static|switch|throw|trait|try|unset|use|var|while|xor|yield)\b`, tokKeyword),
+			mustRule(`\b(true|false|null|TRUE|FALSE|NULL)\b`, tokConstant),
+			mustRule(`\b(bool|boolean|int|integer|float|double|string|array|object|callable|iterable|mixed|void|never|enum)\b`, tokType),
+			mustRule(`\b[A-Z][A-Za-z0-9_]*\b`, tokType),
+			mustRule(`\b[0-9][0-9_]*(\.[0-9_]+)?([eE][+-]?[0-9]+)?\b`, tokNumber),
+			mustRule(`\b0[xX][0-9a-fA-F_]+\b`, tokNumber),
+			funcRule(),
+			mustRule(`[$][A-Za-z_][A-Za-z0-9_]*`, tokConstant),
+			mustRule(`[{}()\[\];,:.<>=+\-*/%&|^!~?@]`, tokPunctuation),
+		}
+	case "swift":
+		return []hlRule{
+			mustRule(`\/\/[^\n]*|\/\*[\s\S]*?\*\/`, tokComment),
+			mustRule(`"(?:\\.|[^"\\])*"`, tokString),
+			mustRule(`\b(associatedtype|async|await|break|case|catch|class|continue|default|defer|do|else|enum|extension|fallthrough|false|final|for|func|get|guard|if|import|in|inout|internal|is|lazy|let|mutating|nil|open|operator|override|private|protocol|public|repeat|required|rethrows|return|self|Self|set|some|static|struct|subscript|super|switch|throw|throws|true|try|typealias|var|weak|where|while|willSet|didSet)\b`, tokKeyword),
+			mustRule(`\b(Bool|String|Int|Int8|Int16|Int32|Int64|UInt|UInt8|UInt16|UInt32|UInt64|Float|Double|Character|Array|Set|Dictionary|Optional|Result|Data|URL|Date|UUID|Error|Any|Void)\b`, tokType),
+			mustRule(`\b[A-Z][A-Za-z0-9_]*\b`, tokType),
+			mustRule(`\b[0-9][0-9_]*(\.[0-9_]+)?([eE][+-]?[0-9]+)?\b`, tokNumber),
+			mustRule(`\b0[xX][0-9a-fA-F_]+\b`, tokNumber),
+			funcRule(),
+			mustRule(`[{}()\[\];,:.<>=+\-*/%&|^!~?]`, tokPunctuation),
+		}
+	case "dart":
+		return []hlRule{
+			mustRule(`\/\/[^\n]*|\/\*[\s\S]*?\*\/`, tokComment),
+			mustRule(`"(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*'`, tokString),
+			mustRule(`\b(abstract|as|assert|async|await|break|case|catch|class|const|continue|covariant|default|deferred|do|dynamic|else|enum|export|extends|extension|external|factory|false|final|finally|for|Function|get|hide|if|implements|import|in|interface|is|late|library|mixin|new|null|on|operator|part|rethrow|return|set|show|static|super|switch|sync|this|throw|true|try|typedef|var|void|while|with|yield)\b`, tokKeyword),
+			mustRule(`\b(int|double|String|bool|List|Map|Set|Runes|Symbol|Object|num|Never|dynamic|void|Future|Stream)\b`, tokType),
+			mustRule(`\b[A-Z][A-Za-z0-9_]*\b`, tokType),
+			mustRule(`\b[0-9][0-9_]*(\.[0-9_]+)?([eE][+-]?[0-9]+)?\b`, tokNumber),
+			mustRule(`\b0[xX][0-9a-fA-F_]+\b`, tokNumber),
+			funcRule(),
+			mustRule(`[{}()\[\];,:.<>=+\-*/%&|^!~?]`, tokPunctuation),
+		}
+	case "lua":
+		return []hlRule{
+			mustRule(`--[^\n]*|--\[\[[\s\S]*?\]\]`, tokComment),
+			mustRule(`"(?:\\.|[^"\\])*"|'(?:[^'\\])*'|--\[\[[\s\S]*?\]\]`, tokString),
+			mustRule(`\b(break|do|else|elseif|end|false|for|function|goto|if|in|local|nil|not|or|repeat|return|then|true|until|while)\b`, tokKeyword),
+			mustRule(`\b(true|false|nil)\b`, tokConstant),
+			mustRule(`\b[0-9]+(\.[0-9]+)?([eE][+-]?[0-9]+)?\b`, tokNumber),
+			mustRule(`\b0[xX][0-9a-fA-F]+\b`, tokNumber),
+			funcRule(),
+			mustRule(`[{}()\[\];,:.<>=+\-*/%&|^!~]`, tokPunctuation),
+		}
+	case "elixir":
+		return []hlRule{
+			mustRule(`#[^\n]*`, tokComment),
+			mustRule(`"(?:\\.|[^"\\])*"|'(?:[^'\\])*'`, tokString),
+			mustRule(`\b(after|and|catch|case|cond|def|defp|defmodule|defprotocol|defimpl|defmacro|defstruct|defguard|do|else|end|fn|for|if|import|in|not|or|quote|raise|receive|require|rescue|return|throw|try|unless|unquote|use|when|while|with)\b`, tokKeyword),
+			mustRule(`\b(true|false|nil)\b`, tokConstant),
+			mustRule(`\b[A-Z][A-Za-z0-9_]*\b`, tokType),
+			mustRule(`\b[0-9]+(\.[0-9]+)?([eE][+-]?[0-9]+)?\b`, tokNumber),
+			mustRule(`\b0[xX][0-9a-fA-F]+\b`, tokNumber),
+			mustRule(`:[a-zA-Z_][a-zA-Z0-9_]*`, tokConstant),
+			mustRule(`[{}()\[\];,:.<>=+\-*/%&|^!@?]`, tokPunctuation),
+		}
+	case "haskell":
+		return []hlRule{
+			mustRule(`--[^\n]*|{-[\s\S]*?-}`, tokComment),
+			mustRule(`"(?:\\.|[^"\\])*"`, tokString),
+			mustRule(`\b(case|class|data|default|deriving|do|else|foreign|if|import|in|infix|infixl|infixr|instance|let|module|newtype|of|then|type|where|_)\b`, tokKeyword),
+			mustRule(`\b(True|False|undefined)\b`, tokConstant),
+			mustRule(`\b(Int|Integer|Float|Double|Char|String|Bool|IO|Maybe|Either|Just|Nothing|Left|Right)\b`, tokType),
+			mustRule(`\b[A-Z][A-Za-z0-9_]*\b`, tokType),
+			mustRule(`\b[0-9]+(\.[0-9]+)?([eE][+-]?[0-9]+)?\b`, tokNumber),
+			mustRule(`\b0[xX][0-9a-fA-F]+\b`, tokNumber),
+			funcRule(),
+			mustRule(`[{}()\[\];,:.<>=+\-*/%&|$!?]`, tokPunctuation),
+		}
+	case "clojure":
+		return []hlRule{
+			mustRule(`;[^\n]*`, tokComment),
+			mustRule(`"(?:\\.|[^"\\])*"`, tokString),
+			mustRule(`\b(def|defn|defmacro|defmulti|defmethod|defprotocol|defrecord|deftype|fn|let|letfn|loop|recur|if|when|cond|case|do|when-let|if-let|doseq|dotimes|try|catch|finally|throw|ns|require|import|use)\b`, tokKeyword),
+			mustRule(`\b(true|false|nil)\b`, tokConstant),
+			mustRule(`\b[0-9]+(\.[0-9]+)?\b`, tokNumber),
+			mustRule(`:[a-zA-Z_\-][a-zA-Z0-9_\-]*`, tokConstant),
+			mustRule(`[{}()\[\]]`, tokPunctuation),
+		}
+	case "perl":
+		return []hlRule{
+			mustRule(`#[^\n]*`, tokComment),
+			mustRule(`"(?:\\.|[^"\\])*"|'(?:[^'\\])*'`, tokString),
+			mustRule(`\b(my|our|local|use|require|sub|if|elsif|else|unless|while|until|for|foreach|do|return|last|next|redo|goto|and|or|not|eq|ne|lt|gt|le|ge|cmp|x|q|qq|qw|qr|m|s|tr|y|print|printf|say|die|warn|chomp|chop|split|join|map|grep|sort|reverse|keys|values|each|exists|delete|defined|undef|scalar|wantarray|ref|bless)\b`, tokKeyword),
+			mustRule(`\b[0-9]+(\.[0-9]+)?\b`, tokNumber),
+			mustRule(`[$@%&][a-zA-Z_][a-zA-Z0-9_]*`, tokConstant),
+			funcRule(),
+			mustRule(`[{}()\[\];,:.<>=+\-*/%&|^!~?]`, tokPunctuation),
+		}
+	case "toml":
+		return []hlRule{
+			mustRule(`#[^\n]*`, tokComment),
+			mustRule(`"(?:\\.|[^"\\])*"|'(?:[^'\\])*'`, tokString),
+			mustRule(`\b(true|false)\b`, tokConstant),
+			mustRule(`-?\b[0-9]+(\.[0-9]+)?([eE][+-]?[0-9]+)?\b`, tokNumber),
+			mustRule(`\b[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z\b`, tokNumber),
+			mustGroupRule(`\[([a-zA-Z0-9_.-]+)\]`, tokType),
+			mustGroupRule(`([a-zA-Z_][a-zA-Z0-9_.-]*)\s*=`, tokFunction),
+			mustRule(`[:{}\[\],]`, tokPunctuation),
+		}
+	case "dockerfile":
+		return []hlRule{
+			mustRule(`#[^\n]*`, tokComment),
+			mustRule(`"(?:\\.|[^"\\])*"|'(?:[^'\\])*'`, tokString),
+			mustRule(`\b(FROM|RUN|CMD|LABEL|MAINTAINER|EXPOSE|ENV|ADD|COPY|ENTRYPOINT|VOLUME|USER|WORKDIR|ARG|ONBUILD|STOPSIGNAL|HEALTHCHECK|SHELL|AS)\b`, tokKeyword),
+			mustRule(`\b[0-9]+\b`, tokNumber),
+			mustRule(`[{}()\[\];,:.<>=+\-*/%&|^!]`, tokPunctuation),
+		}
+	case "makefile":
+		return []hlRule{
+			mustRule(`#[^\n]*`, tokComment),
+			mustRule(`"(?:\\.|[^"\\])*"|'(?:[^'\\])*'`, tokString),
+			mustRule(`\b(ifndef|ifdef|ifeq|ifneq|else|endif|include|-include|define|endef|override|export|unexport|vpath|foreach|call|eval|shell|origin|flavor|warning|error|info)\b`, tokKeyword),
+			mustGroupRule(`^([a-zA-Z_][a-zA-Z0-9_.-]*):`, tokFunction),
+			mustRule(`[$][a-zA-Z_][a-zA-Z0-9_]*|[$][(][^)]*[)]|[$][{][^}]*[}]|[$][<@^*?%]`, tokConstant),
+			mustRule(`[{}()\[\];,:.<>=+\-*/%&|^!]`, tokPunctuation),
+		}
+	case "protobuf", "proto":
+		return []hlRule{
+			mustRule(`\/\/[^\n]*|\/\*[\s\S]*?\*\/`, tokComment),
+			mustRule(`"(?:\\.|[^"\\])*"|'(?:[^'\\])*'`, tokString),
+			mustRule(`\b(syntax|import|package|option|message|enum|service|rpc|returns|stream|reserved|extend|extensions|oneof|map|repeated|optional|required)\b`, tokKeyword),
+			mustRule(`\b(double|float|int32|int64|uint32|uint64|sint32|sint64|fixed32|fixed64|sfixed32|sfixed64|bool|string|bytes)\b`, tokType),
+			mustRule(`\b[A-Z][A-Za-z0-9_]*\b`, tokType),
+			mustRule(`\b[0-9]+\b`, tokNumber),
+			mustRule(`[{}()\[\];,:.<>=+\-*/%&|!]`, tokPunctuation),
+		}
+	case "graphql":
+		return []hlRule{
+			mustRule(`#[^\n]*`, tokComment),
+			mustRule(`"(?:\\.|[^"\\])*"`, tokString),
+			mustRule(`\b(type|input|interface|union|enum|scalar|schema|directive|extend|implements|fragment|query|mutation|subscription|on|repeatable)\b`, tokKeyword),
+			mustRule(`\b(true|false|null)\b`, tokConstant),
+			mustRule(`\b(Int|Float|String|Boolean|ID)\b`, tokType),
+			mustRule(`\b[A-Z][A-Za-z0-9_]*\b`, tokType),
+			mustRule(`\b[0-9]+(\.[0-9]+)?\b`, tokNumber),
+			mustRule(`[{}()\[\];,:.<>=+\-*/%&|!@]`, tokPunctuation),
+		}
+	case "nim":
+		return []hlRule{
+			mustRule(`#[^\n]*`, tokComment),
+			mustRule(`"(?:\\.|[^"\\])*"|'(?:[^'\\])*'`, tokString),
+			mustRule(`\b(addr|and|as|asm|bind|block|break|case|cast|concept|const|continue|converter|defer|discard|distinct|div|do|elif|else|end|enum|except|export|finally|for|from|func|if|import|in|include|interface|is|isnot|iterator|let|macro|method|mixin|mod|nil|not|notin|object|of|or|out|proc|ptr|raise|ref|return|shl|shr|static|template|try|tuple|type|using|var|when|while|xor|yield)\b`, tokKeyword),
+			mustRule(`\b(true|false)\b`, tokConstant),
+			mustRule(`\b[A-Z][A-Za-z0-9_]*\b`, tokType),
+			mustRule(`\b[0-9]+(\.[0-9]+)?([eE][+-]?[0-9]+)?\b`, tokNumber),
+			mustRule(`\b0[xX][0-9a-fA-F_]+\b`, tokNumber),
+			funcRule(),
+			mustRule(`[{}()\[\];,:.<>=+\-*/%&|^!~?]`, tokPunctuation),
+		}
+	case "zig":
+		return []hlRule{
+			mustRule(`\/\/[^\n]*`, tokComment),
+			mustRule(`"(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*'`, tokString),
+			mustRule(`\b(align|allowzero|and|asm|async|await|break|catch|comptime|const|continue|defer|else|enum|errdefer|error|export|extern|fn|for|if|inline|noalias|nosuspend|opaque|or|orelse|packed|pub|resume|return|struct|suspend|switch|test|threadlocal|try|union|unreachable|var|volatile|while)\b`, tokKeyword),
+			mustRule(`\b(true|false|null|undefined)\b`, tokConstant),
+			mustRule(`\b(u8|u16|u32|u64|i8|i16|i32|i64|f32|f64|bool|void|anyerror|anytype|anyopaque|noreturn|comptime_int|comptime_float)\b`, tokType),
+			mustRule(`\b[A-Z][A-Za-z0-9_]*\b`, tokType),
+			mustRule(`\b[0-9]+(\.[0-9]+)?\b`, tokNumber),
+			mustRule(`\b0[xX][0-9a-fA-F_]+\b`, tokNumber),
+			funcRule(),
+			mustRule(`[{}()\[\];,:.<>=+\-*/%&|^!~?]`, tokPunctuation),
+		}
+	case "v":
+		return []hlRule{
+			mustRule(`\/\/[^\n]*|\/\*[\s\S]*?\*\/`, tokComment),
+			mustRule(`"(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*'`, tokString),
+			mustRule(`\b(as|asm|assert|atomic|break|const|continue|defer|else|enum|fn|for|go|goto|if|import|in|interface|is|lock|match|module|mut|none|or|pub|return|rlock|shared|struct|type|union|unlock|unsafe)\b`, tokKeyword),
+			mustRule(`\b(true|false)\b`, tokConstant),
+			mustRule(`\b(int|u32|u64|f32|f64|string|bool|byte|rune|void|i8|i16|i32|i64|u8|u16|any)\b`, tokType),
+			mustRule(`\b[A-Z][A-Za-z0-9_]*\b`, tokType),
+			mustRule(`\b[0-9]+(\.[0-9]+)?\b`, tokNumber),
+			mustRule(`\b0[xX][0-9a-fA-F_]+\b`, tokNumber),
+			funcRule(),
+			mustRule(`[{}()\[\];,:.<>=+\-*/%&|^!~?]`, tokPunctuation),
+		}
+	case "nix":
+		return []hlRule{
+			mustRule(`#[^\n]*`, tokComment),
+			mustRule(`"(?:\\.|[^"\\])*"`, tokString),
+			mustRule(`\b(abort|baseNameOf|builtins|derivation|derivationStrict|fetchTarball|import|isNull|map|removeAttrs|throw|toString|true|false|null|let|in|if|then|else|with|rec|inherit)\b`, tokKeyword),
+			mustRule(`\b[A-Z][A-Za-z0-9_]*\b`, tokType),
+			mustRule(`\b[0-9]+(\.[0-9]+)?\b`, tokNumber),
+			mustRule(`[{}()\[\];,:.<>=+\-*/%&|!?]`, tokPunctuation),
+		}
+	case "terraform", "tf", "hcl":
+		return []hlRule{
+			mustRule(`#[^\n]*|\/\/[^\n]*`, tokComment),
+			mustRule(`"(?:\\.|[^"\\])*"`, tokString),
+			mustRule(`\b(resource|data|variable|output|locals|module|provider|terraform|required_version|required_providers|for_each|count|for|in|if|else|dynamic|lifecycle|depends_on|source|version)\b`, tokKeyword),
+			mustRule(`\b(true|false|null)\b`, tokConstant),
+			mustRule(`\b[0-9]+(\.[0-9]+)?\b`, tokNumber),
+			mustGroupRule(`([a-zA-Z_][a-zA-Z0-9_-]*)\s*[=:{]`, tokFunction),
+			mustRule(`[{}()\[\];,:.<>=+\-*/%&|!]`, tokPunctuation),
+		}
+	case "julia":
+		return []hlRule{
+			mustRule(`#[^\n]*`, tokComment),
+			mustRule(`"(?:\\.|[^"\\])*"|'''[\s\S]*?'''`, tokString),
+			mustRule(`\b(abstract|baremodule|begin|break|catch|const|continue|do|else|elseif|end|export|false|finally|for|function|global|if|import|in|isa|let|local|macro|module|mutable|primitive|quote|return|struct|true|try|type|using|where|while)\b`, tokKeyword),
+			mustRule(`\b(nothing|missing|NaN|Inf)\b`, tokConstant),
+			mustRule(`\b(Int|Int8|Int16|Int32|Int64|UInt|Float32|Float64|Bool|String|Char|Array|Vector|Matrix|Dict|Set|Tuple|Nothing|Any)\b`, tokType),
+			mustRule(`\b[A-Z][A-Za-z0-9_]*\b`, tokType),
+			mustRule(`\b[0-9]+(\.[0-9]+)?([eE][+-]?[0-9]+)?(im)?\b`, tokNumber),
+			mustRule(`\b0[xX][0-9a-fA-F]+\b`, tokNumber),
+			funcRule(),
+			mustRule(`[{}()\[\];,:.<>=+\-*/%&|^!~?]`, tokPunctuation),
+		}
+	case "r":
+		return []hlRule{
+			mustRule(`#[^\n]*`, tokComment),
+			mustRule(`"(?:\\.|[^"\\])*"|'(?:[^'\\])*'`, tokString),
+			mustRule(`\b(if|else|for|while|repeat|function|return|break|next|in|TRUE|FALSE|NULL|NA|Inf|NaN|library|require|source)\b`, tokKeyword),
+			mustRule(`\b[0-9]+(\.[0-9]+)?([eE][+-]?[0-9]+)?\b`, tokNumber),
+			funcRule(),
+			mustRule(`[{}()\[\];,:.<>=+\-*/%&|^!~?$@]`, tokPunctuation),
+		}
+	case "kotlin":
+		return []hlRule{
+			mustRule(`\/\/[^\n]*|\/\*[\s\S]*?\*\/`, tokComment),
+			mustRule(`"(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*'`, tokString),
+			mustRule(`\b(as|break|class|continue|data|do|else|false|for|fun|if|in|is|null|object|package|return|super|this|true|typealias|typeof|val|var|when|while|by|where|abstract|annotation|companion|const|crossinline|external|final|infix|inline|internal|lateinit|noinline|open|operator|out|override|private|protected|public|reified|sealed|suspend|tailrec|vararg|field|it)\b`, tokKeyword),
+			mustRule(`\b(Boolean|Byte|Char|Double|Float|Int|Long|Short|String|Unit|Nothing|Any|Array|List|Map|Set|Sequence)\b`, tokType),
+			mustRule(`\b[A-Z][A-Za-z0-9_]*\b`, tokType),
+			mustRule(`\b[0-9][0-9_]*(\.[0-9_]+)?([eE][+-]?[0-9]+)?[fFdDlL]?\b`, tokNumber),
+			mustRule(`\b0[xX][0-9a-fA-F_]+\b`, tokNumber),
+			funcRule(),
+			mustRule(`[{}()\[\];,:.<>=+\-*/%&|^!~?]`, tokPunctuation),
+		}
+	case "scala":
+		return []hlRule{
+			mustRule(`\/\/[^\n]*|\/\*[\s\S]*?\*\/`, tokComment),
+			mustRule(`"(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*'`, tokString),
+			mustRule(`\b(abstract|case|catch|class|def|do|else|extends|false|final|finally|for|forSome|if|implicit|import|lazy|match|new|null|object|override|package|private|protected|return|sealed|super|this|throw|trait|true|try|type|val|var|while|with|yield|given|using|enum|then)\b`, tokKeyword),
+			mustRule(`\b(Int|Long|Float|Double|Boolean|Char|String|Unit|Nothing|Any|Seq|List|Map|Set|Option|Some|None|Either|Left|Right)\b`, tokType),
+			mustRule(`\b[A-Z][A-Za-z0-9_]*\b`, tokType),
+			mustRule(`\b[0-9][0-9_]*(\.[0-9_]+)?([eE][+-]?[0-9]+)?[fFdDlL]?\b`, tokNumber),
+			mustRule(`\b0[xX][0-9a-fA-F_]+\b`, tokNumber),
+			funcRule(),
+			mustRule(`[{}()\[\];,:.<>=+\-*/%&|^!~?]`, tokPunctuation),
+		}
+	case "groovy":
+		return []hlRule{
+			mustRule(`\/\/[^\n]*|\/\*[\s\S]*?\*\/`, tokComment),
+			mustRule(`"(?:\\.|[^"\\])*"|'(?:[^'\\])*'|"""[\s\S]*?"""`, tokString),
+			mustRule(`\b(as|assert|break|case|catch|class|const|continue|def|default|do|else|enum|extends|false|finally|for|goto|if|implements|import|in|instanceof|interface|new|null|package|return|super|switch|this|throw|throws|trait|true|try|while|def|it)\b`, tokKeyword),
+			mustRule(`\b(boolean|byte|char|short|int|long|float|double|String|def|void|var)\b`, tokType),
+			mustRule(`\b[A-Z][A-Za-z0-9_]*\b`, tokType),
+			mustRule(`\b[0-9][0-9_]*(\.[0-9_]+)?([eE][+-]?[0-9]+)?[fFdDgGlL]?\b`, tokNumber),
+			funcRule(),
+			mustRule(`[{}()\[\];,:.<>=+\-*/%&|^!~?]`, tokPunctuation),
+		}
+	case "vue":
+		return []hlRule{
+			mustRule(`<!--[\s\S]*?-->`, tokComment),
+			mustRule(`"(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*'`, tokString),
+			mustRule(`<\/?[a-zA-Z][a-zA-Z0-9:-]*`, tokKeyword),
+			mustRule(`\/?>`, tokPunctuation),
+			mustGroupRule(`([a-zA-Z_:][a-zA-Z0-9_:.-]*)\s*=`, tokType),
+			mustRule(`[{}()\[\];,:.<>=+\-*/%&|^!?]`, tokPunctuation),
+		}
+	case "svelte":
+		return []hlRule{
+			mustRule(`<!--[\s\S]*?-->`, tokComment),
+			mustRule(`"(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*'`, tokString),
+			mustRule(`<\/?[a-zA-Z][a-zA-Z0-9:-]*`, tokKeyword),
+			mustRule(`\/?>`, tokPunctuation),
+			mustGroupRule(`([a-zA-Z_:][a-zA-Z0-9_:.-]*)\s*=`, tokType),
+			mustRule(`\b(if|each|await|then|catch|else|html|debug|const|let|export|import|from|as|on|bind|class|style|use|transition|animate|in|out|snippet)\b`, tokKeyword),
+			mustRule(`[{}()\[\];,:.<>=+\-*/%&|^!?]`, tokPunctuation),
+		}
 	}
 	return nil
 }
@@ -287,7 +569,7 @@ func normalizeLang(lang string) string {
 	switch l {
 	case "py":
 		return "python"
-	case "js", "jsx":
+	case "js", "jsx", "mjs", "cjs":
 		return "javascript"
 	case "ts", "tsx":
 		return "typescript"
@@ -295,16 +577,26 @@ func normalizeLang(lang string) string {
 		return "rust"
 	case "rb":
 		return "ruby"
-	case "sh", "zsh":
+	case "sh", "zsh", "bash":
 		return "bash"
 	case "yml":
 		return "yaml"
-	case "c++", "cc", "cxx", "hpp":
+	case "c++", "cc", "cxx", "hpp", "hh", "h++":
 		return "cpp"
-	case "kt":
+	case "kt", "kts":
 		return "kotlin"
 	case "md":
 		return "markdown"
+	case "tf":
+		return "terraform"
+	case "proto":
+		return "protobuf"
+	case "hcl":
+		return "terraform"
+	case "vue":
+		return "vue"
+	case "svelte":
+		return "svelte"
 	}
 	return l
 }
@@ -466,10 +758,31 @@ func diffFullLine(s diffStyle, before, after, beforeDigits, afterDigits, numWidt
 
 func renderDiffFileHeader(fc diffFileChange, beforeDigits, afterDigits, numWidth, contentWidth, totalWidth int) string {
 	label := fc.newPath
-	if fc.oldPath != "" && fc.oldPath != fc.newPath {
+	if fc.oldPath != "" && fc.oldPath != fc.newPath && fc.isRenamed {
 		label = fc.oldPath + " → " + fc.newPath
 	}
-	return diffFullLine(defaultDiffStyles().filename, 0, 0, beforeDigits, afterDigits, numWidth, contentWidth, totalWidth, "  ", label)
+
+	// Status indicator prefix
+	statusIcon := "  "
+	statusNote := ""
+	if fc.isNew {
+		statusIcon = "✚ "
+		statusNote = " (new file)"
+	} else if fc.isDeleted {
+		statusIcon = "✖ "
+		statusNote = " (deleted)"
+	} else if fc.isRenamed {
+		statusIcon = "→ "
+		statusNote = " (renamed)"
+	} else if fc.isBinary {
+		statusIcon = "◆ "
+		statusNote = " (binary)"
+	} else if fc.oldMode != "" && fc.newMode != "" && fc.oldMode != fc.newMode {
+		statusIcon = "⊞ "
+		statusNote = " (mode " + fc.oldMode + " → " + fc.newMode + ")"
+	}
+
+	return diffFullLine(defaultDiffStyles().filename, 0, 0, beforeDigits, afterDigits, numWidth, contentWidth, totalWidth, statusIcon, label+statusNote)
 }
 
 func renderDiffHunkDivider(hunk diffHunk, beforeDigits, afterDigits, numWidth, contentWidth, totalWidth int) string {
@@ -534,6 +847,15 @@ func renderDiff(files []diffFileChange, width int) string {
 		b.WriteString(renderDiffFileHeader(fc, beforeDigits, afterDigits, numWidth, contentWidth, totalWidth))
 		b.WriteString("\n")
 
+		if fc.isBinary {
+			b.WriteString(diffFullLine(defaultDiffStyles().missing, 0, 0, beforeDigits, afterDigits, numWidth, contentWidth, totalWidth, "  ", "  Binary file — no diff available"))
+			b.WriteString("\n")
+			if fi < len(files)-1 {
+				b.WriteString("\n")
+			}
+			continue
+		}
+
 		lang := langFromPath(fc.newPath)
 		if lang == "" {
 			lang = langFromPath(fc.oldPath)
@@ -587,23 +909,56 @@ func parseUnifiedDiff(diff string) []diffFileChange {
 				files = append(files, *cur)
 			}
 			cur = &diffFileChange{}
+		case strings.HasPrefix(line, "new file mode"):
+			if cur != nil {
+				cur.isNew = true
+				cur.newMode = strings.TrimPrefix(line, "new file mode ")
+			}
+		case strings.HasPrefix(line, "deleted file mode"):
+			if cur != nil {
+				cur.isDeleted = true
+				cur.oldMode = strings.TrimPrefix(line, "deleted file mode ")
+			}
+		case strings.HasPrefix(line, "old mode "):
+			if cur != nil {
+				cur.oldMode = strings.TrimPrefix(line, "old mode ")
+			}
+		case strings.HasPrefix(line, "new mode "):
+			if cur != nil {
+				cur.newMode = strings.TrimPrefix(line, "new mode ")
+			}
+		case strings.HasPrefix(line, "rename from "):
+			if cur != nil {
+				cur.oldPath = strings.TrimPrefix(line, "rename from ")
+				cur.isRenamed = true
+			}
+		case strings.HasPrefix(line, "rename to "):
+			if cur != nil {
+				cur.newPath = strings.TrimPrefix(line, "rename to ")
+				cur.isRenamed = true
+			}
+		case strings.HasPrefix(line, "Binary files"):
+			if cur != nil {
+				cur.isBinary = true
+			}
 		case strings.HasPrefix(line, "--- "):
 			if cur != nil {
 				cur.oldPath = strings.TrimPrefix(line, "--- ")
 				cur.oldPath = strings.TrimPrefix(cur.oldPath, "a/")
+				// "/dev/null" means new file
+				if cur.oldPath == "/dev/null" {
+					cur.isNew = true
+				}
 			}
 		case strings.HasPrefix(line, "+++ "):
 			if cur != nil {
 				cur.newPath = strings.TrimPrefix(line, "+++ ")
 				cur.newPath = strings.TrimPrefix(cur.newPath, "b/")
-			}
-		case strings.HasPrefix(line, "rename from "):
-			if cur != nil {
-				cur.oldPath = strings.TrimPrefix(line, "rename from ")
-			}
-		case strings.HasPrefix(line, "rename to "):
-			if cur != nil {
-				cur.newPath = strings.TrimPrefix(line, "rename to ")
+				// "/dev/null" means deleted file
+				if cur.newPath == "/dev/null" {
+					cur.isDeleted = true
+					cur.newPath = cur.oldPath
+				}
 			}
 		case hunkHeaderRe.MatchString(line):
 			if curHunk != nil && cur != nil {
